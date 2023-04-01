@@ -1,9 +1,9 @@
 #pragma once
 
+#include "codec.hpp"
 #include "fold.hpp"
-#include "string_traits.hpp"
-#include "utf.hpp"
 #include <string>
+#include <vector>
 
 namespace strings {
 
@@ -12,10 +12,12 @@ namespace strings {
 // returns search score 0..6 (see impl for details)
 //
 struct searcher {
-    std::u32string nc;
-    std::u32string nf;
+    using carrier_string = std::basic_string<codepoint::carrier_type>;
+    carrier_string nc;
+    carrier_string nf;
 
     using score = unsigned;
+    static inline constexpr auto npos = carrier_string::npos;
 
     static constexpr auto no_match = score{0};
     static constexpr auto inner_ci = score{1};
@@ -27,30 +29,33 @@ struct searcher {
 
     searcher(searcher const&) = delete;
 
-    template <typename Input> searcher(Input const& needle)
+    searcher(string_like_input auto const& needle)
     {
-        auto u = utf::decoder{as_string_view(needle)};
-        while (!u.empty()) {
-            auto c = u.get();
-            nc += c;
-            nf += fold<folding::simple>(c);
+        auto dec = utf::make_decoder(needle);
+        auto c = dec();
+        while (c) {
+            nc.push_back(c->value);
+            nf.push_back(fold::unicode_simple(*c).value);
+            c = dec();
         }
     }
 
-    template <typename Input> auto operator()(Input const& haystack) -> score
+    auto operator()(string_like_input auto const& haystack) -> score
     {
-        auto sv = as_string_view(haystack);
+        auto dec = utf::make_decoder(haystack);
 
-        if (nf.empty())
-            return sv.empty() ? full_cs : no_match;
+        auto c = dec();
 
-        auto u = utf::decoder{sv};
-        auto hc = std::u32string{};
-        auto hf = std::u32string{};
-        while (!u.empty()) {
-            auto c = u.get();
-            hc += c;
-            hf += fold<folding::simple>(c);
+        if (!c.has_value())
+            return nf.empty() ? full_cs : no_match;
+
+        auto hc = carrier_string{c->value};
+        auto hf = carrier_string{fold::unicode_simple(*c).value};
+        c = dec();
+        while (c.has_value()) {
+            hc.push_back(c->value);
+            hf.push_back(fold::unicode_simple(*c).value);
+            c = dec();
         }
 
         // case sensitive
@@ -61,7 +66,7 @@ struct searcher {
             else
                 return front_cs; // prefix match
         }
-        else if (p != std::u32string::npos) {
+        else if (p != npos) {
             return inner_cs;
         }
 
@@ -73,7 +78,7 @@ struct searcher {
             else
                 return front_ci; // prefix match
         }
-        else if (p != std::u32string::npos) {
+        else if (p != npos) {
             return inner_ci;
         }
 

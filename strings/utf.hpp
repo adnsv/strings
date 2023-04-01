@@ -1,314 +1,264 @@
 #pragma once
 
-#include "string_traits.hpp"
-#include <string>
-#include <string_view>
+#include "codepoint.hpp"
+#include <concepts>
+#include <ranges>
 
 namespace strings::utf {
 
-enum encoding {
-    utf8 = 1,
-    utf16 = 2,
-    utf32 = 4,
-};
+constexpr auto u8 = encoding::utf8;
+constexpr auto u16 = encoding::utf16;
+constexpr auto u32 = encoding::utf32;
 
-constexpr auto replacement_char = char32_t{0xfffd};
+// encoding_of
+//
+// - utf8 for char, char8_t
+// - utf16 for char16_t, wchar_t if sizeof(wchar_t) == 2
+// - utf32 for char32_t, wchar_t if sizeof(wchar_t) == 4
+//
+template <codeunit U> constexpr auto encoding_of = static_cast<encoding>(sizeof(U));
 
-constexpr auto valid_codepoint(char32_t c) -> bool
+template <encoding Enc> constexpr auto codeunit_size_of = static_cast<std::size_t>(Enc);
+
+template <typename Iter, typename Sentinel>
+constexpr auto u8_to_codepoint(Iter first, Sentinel last, codepoint& output, unexpected_policy utp) -> Iter
 {
-    return c < 0xd800 || (c > 0xdfff && c < 0x110000);
+    using cp = codepoint::carrier_type;
+    using cu = std::make_unsigned_t<std::iter_value_t<Iter>>;
+    static_assert(sizeof(cu) == 1);
+
+    output = errcp::insufficient;
+
+    if (first == last) // insufficient_input
+        return first;
+
+    auto c0 = cp(cu(*first++));
+
+    if (c0 < 0b10000000u) {
+        // 1-byte sequence [U+0000..U+007F]
+        output = codepoint(c0);
+        return first;
+    }
+
+    auto is_trail = [](cu c) { return (c & 0b11000000u) == 0b10000000u; };
+
+    if (c0 < 0b11000000u) {
+        output = errcp::unexpected;
+        if (utp == unexpected_policy::consume_all)
+            while (first != last && is_trail(cp(cu(*first))))
+                ++first;
+        return first;
+    }
+
+    cp c2, c3, c4, c5, c6;
+    constexpr cp trail_mask = 0b00111111;
+
+    auto is_starter = [](cp c) { return (c & 0b11000000u) != 0b10000000u; };
+
+    // byte #2
+    if (first == last) // insufficient_input
+        return first;
+    c2 = cp(cu(*first));
+    if (is_starter(c2)) {
+        output = errcp::incomplete;
+        return first;
+    }
+    ++first;
+    if (c0 < 0b11100000u) {
+        // 2-byte sequence [U+0080..U+07FF]
+        output = codepoint(             //
+            ((c0 & 0b00011111) << 06) | // #1
+            (c2 & trail_mask)           // #2
+        );
+        if (output.value < 0x80)
+            output = errcp::overlong;
+        return first;
+    }
+
+    // byte #3
+    if (first == last) // insufficient_input
+        return first;
+    c3 = cp(cu(*first));
+    if (is_starter(c3)) {
+        output = errcp::incomplete;
+        return first;
+    }
+    ++first;
+    if (c0 < 0b11110000u) {
+        // 3-byte sequence [U+00800..U+FFFF]
+        output = codepoint(             //
+            ((c0 & 0b00001111) << 12) | // #1
+            ((c2 & trail_mask) << 06) | // #2
+            (c3 & trail_mask)           // #3
+        );
+        if (output.value < 0x800)
+            output = errcp::overlong;
+        return first;
+    }
+
+    // byte #4
+    if (first == last) // insufficient_input
+        return first;
+    c4 = cp(cu(*first));
+    if (is_starter(c4)) {
+        output = errcp::incomplete;
+        return first;
+    }
+    ++first;
+    if (c0 < 0b11111000u) {
+        // 4-byte sequence [U+00010000..U+001FFFFF]
+        output = codepoint(             //
+            ((c0 & 0b00000111) << 18) | // #1
+            ((c2 & trail_mask) << 12) | // #2
+            ((c3 & trail_mask) << 06) | // #3
+            (c4 & trail_mask)           // #4
+        );
+        if (output.value < 0x00010000)
+            output = errcp::overlong;
+        return first;
+    }
+
+    // byte #5
+    if (first == last) // insufficient_input
+        return first;
+    c5 = cp(cu(*first));
+    if (is_starter(c5)) {
+        output = errcp::incomplete;
+        return first;
+    }
+    ++first;
+    if (c0 < 0b11111100u) {
+        // 5-byte sequence [U+00200000..U+03FFFFFF]
+        output = codepoint(             //
+            ((c0 & 0b00000011) << 24) | // #1
+            ((c2 & trail_mask) << 18) | // #2
+            ((c3 & trail_mask) << 12) | // #3
+            ((c4 & trail_mask) << 06) | // #4
+            (c5 & trail_mask)           // #5
+        );
+        if (output.value < 0x00200000)
+            output = errcp::overlong;
+        return first;
+    }
+
+    // byte #6
+    if (first == last) // insufficient_input
+        return first;
+    c6 = cp(cu(*first));
+    if (is_starter(c6)) {
+        output = errcp::incomplete;
+        return first;
+    }
+    ++first;
+    // 6-byte sequence [U+04000000..U+7FFFFFFF]
+    output = codepoint(             //
+        ((c0 & 0b00000001) << 30) | // #1
+        ((c2 & trail_mask) << 24) | // #2
+        ((c3 & trail_mask) << 18) | // #3
+        ((c4 & trail_mask) << 12) | // #4
+        ((c5 & trail_mask) << 06) | // #5
+        (c6 & trail_mask)           // #6
+    );
+    if (output.value < 0x04000000)
+        output = errcp::overlong;
+    return first;
 }
 
-template <typename Codeunit> constexpr auto as_codepoint(Codeunit const cu) -> char32_t
+template <typename Iter, typename Sentinel>
+constexpr auto u16_to_codepoint(Iter first, Sentinel last, codepoint& output, unexpected_policy utp) -> Iter
 {
-    return static_cast<char32_t>(static_cast<std::make_unsigned_t<Codeunit>>(cu));
+    using cp = codepoint::carrier_type;
+    using cu = std::make_unsigned_t<std::iter_value_t<Iter>>;
+    static_assert(sizeof(cu) == 2);
+
+    output = errcp::insufficient;
+    if (first == last)
+        return first;
+
+    auto c0 = cp(cu(*first++));
+
+    if (!unicode::is_surrogate(codepoint{c0})) {
+        output = codepoint{c0};
+        return first;
+    }
+
+    // must start with a high surrogate:
+    if (c0 >= unicode::low_surrogate_first.value) {
+        output = errcp::unexpected;
+        if (utp == unexpected_policy::consume_all)
+            while (first != last && unicode::is_low_surrogate(codepoint(cp(cu(*first)))))
+                ++first;
+        return first;
+    }
+    if (first == last) // insufficient_input
+        return first;
+
+    // must be followed by a low surrogate
+    auto c1 = cp(cu(*first));
+    if (!unicode::is_low_surrogate(codepoint(c1))) {
+        output = errcp::incomplete;
+        return first;
+    }
+
+    output = codepoint((((c0 & 0x3FFu) << 10) | (c1 & 0x3FFu)) + 0x10000);
+    ++first;
+    return first;
 }
 
-enum class errc {
-    no_error,
-    insufficient_input, // more codeunits required to produce a complete
-                        // codepoint
-    invalid_sequence,   // unexpected starter or unexpected trail, 5-byte and
-                        // 6-byte sequences
-    invalid_codepoint,  // a sequence decodes into an invalid codepoint
-};
-
-template <typename Iter> struct decode_result {
-    Iter it;
-    errc ec;
-};
-
-template <typename Codeunit> constexpr auto encoding_of() -> encoding
+template <typename Iter, typename Sentinel>
+constexpr auto u32_to_codepoint(Iter first, Sentinel last, codepoint& output, unexpected_policy dummy) -> Iter
 {
-    constexpr auto sz = codeunit_size<Codeunit>();
-    static_assert(sz == 1 || sz == 2 || sz == 4);
-    if constexpr (sz == 1)
-        return utf8;
-    else if constexpr (sz == 2)
-        return utf16;
-    else
-        return utf32;
+    using cp = codepoint::carrier_type;
+    using cu = std::make_unsigned_t<std::iter_value_t<Iter>>;
+    static_assert(sizeof(cu) == 4);
+
+    output = (first == last) ? output = errcp::insufficient : output = codepoint(cp(cu(*first++)));
+    return first;
 }
 
-template <typename Iter>
-constexpr auto decode_u8(Iter first, Iter last, char32_t& cp) -> decode_result<Iter>
+template <typename T> void u8_to_codeunits(codepoint const& cp, std::invocable<T> auto put)
 {
-    auto ret = decode_result<Iter>{first, errc::no_error};
-
-    if (ret.it == last) {
-        ret.ec = errc::insufficient_input;
-        return ret;
+    static_assert(sizeof(T) == 1);
+    auto const c = cp.value; // shortcut
+    if (c < 0x80) {
+        put(c);
     }
-
-    auto next_starter = [&] {
-        while (ret.it != last && (*ret.it & 0b11000000) == 0b10000000)
-            ++ret.it;
-    };
-
-    cp = as_codepoint(*ret.it);
-    ++ret.it;
-    if (cp < 0b10000000) {
-        // one-byte sequence [U+0000..U+0FF]
-        return ret;
+    else if (c < 0x800) {
+        put((c >> 6) | 0xc0);
+        put((c & 0x3f) | 0x80);
     }
-    if (cp < 0b11000000) {
-        // unexpected trail instead of a starter char
-        // before returning an error, skip to a next starter, if possible
-        next_starter();
-        ret.ec = errc::invalid_sequence;
-        return ret;
-    }
-
-    auto next = [&](char32_t& u) -> bool {
-        if (ret.it == last) {
-            ret.ec = errc::insufficient_input;
-            return false;
-        }
-        u = *ret.it;
-        if ((*ret.it & 0b11000000) != 0b10000000) {
-            ret.ec = errc::invalid_sequence;
-            return false;
-        }
-        ++ret.it;
-        return true;
-    };
-
-    // fetch second codeunit
-    auto c2 = char32_t{};
-    if (!next(c2))
-        return ret;
-
-    if (cp < 0b11100000) {
-        // two-byte sequence [U+0080..U+07FF]
-        cp = ((cp & 0x1f) << 6) | (c2 & 0x3f);
-        // other than 0xC0 and 0xC1 overlongs (which we choose to ignore),
-        // this sequence should produce valid codepoints. Therefore, we
-        // do not validate it before returning.
-        return ret;
-    }
-
-    // fetch third byte
-    auto c3 = char32_t{};
-    if (!next(c3))
-        return ret;
-
-    if (cp < 0b11110000) {
-        // three-byte sequence [U+0800..U+FFFF]
-        cp = ((cp & 0x0f) << 12) | ((c2 & 0x3f) << 6) | (c3 & 0x3f);
-    }
-    else if (cp < 0b11111000) {
-        // four-byte sequence [U+10000..U+10FFFF]
-        auto c4 = char32_t{};
-        if (!next(c4))
-            return ret;
-        cp = ((cp & 0x07) << 18) | ((c2 & 0x3f) << 12) | ((c3 & 0x3f) << 6) | (c4 & 0x3f);
+    else if (c < 0x10000) {
+        put((c >> 12) | 0xe0);
+        put(((c >> 6) & 0x3f) | 0x80);
+        put((c & 0x3f) | 0x80);
     }
     else {
-        // more-than-four-byte sequences are invalid
-        next_starter();
-        ret.ec = errc::invalid_sequence;
-        return ret;
-    }
-    if (!valid_codepoint(cp))
-        ret.ec = errc::invalid_codepoint;
-
-    return ret;
-}
-
-template <typename Iter>
-constexpr auto decode_u16(Iter first, Iter last, char32_t& cp) -> decode_result<Iter>
-{
-    auto ret = decode_result{first, errc::no_error};
-
-    if (ret.it == last) {
-        ret.ec = errc::insufficient_input;
-        return ret;
-    }
-    cp = as_codepoint(*ret.it);
-    ++ret.it;
-
-    auto surr = [](char32_t c) { return c >= 0xd800 && c <= 0xdfff; };
-    auto lo_surr = [](char32_t c) { return c >= 0xdc00 && c <= 0xdfff; };
-
-    if (surr(cp)) {
-        // surrogate pair, must start with the hi surrogate:
-        if (cp >= 0xdc00) {
-            ret.ec = errc::invalid_sequence;
-            return ret;
-        }
-        if (ret.it == last) {
-            ret.ec = errc::insufficient_input;
-            return ret;
-        }
-        auto c2 = as_codepoint(*ret.it);
-        if (!lo_surr(c2)) {
-            ret.ec = errc::invalid_sequence;
-            return ret;
-        }
-        ++ret.it;
-        cp = (((cp & 0x3ff) << 10) | (c2 & 0x3ff)) + 0x10000;
-        if (!valid_codepoint(cp))
-            ret.ec = errc::invalid_codepoint;
-    }
-
-    return ret;
-}
-
-template <typename Iter>
-constexpr auto decode_u32(Iter first, Iter last, char32_t& cp) -> decode_result<Iter>
-{
-    auto ret = decode_result<Iter>{first, errc::no_error};
-
-    if (ret.it == last) {
-        ret.ec = errc::insufficient_input;
-        return ret;
-    }
-    cp = as_codepoint(*ret.it);
-    ++ret.it;
-
-    if (!valid_codepoint(cp))
-        ret.ec = errc::invalid_codepoint;
-    return ret;
-}
-
-template <encoding Enc, typename Iter>
-constexpr auto decode(Iter first, Iter last, char32_t& cp) -> decode_result<Iter>
-{
-    static_assert(Enc == utf8 || Enc == utf16 || Enc == utf32, "invalid encoding");
-    if constexpr (Enc == utf8)
-        return decode_u8(first, last, cp);
-    else if constexpr (Enc == utf16)
-        return decode_u16(first, last, cp);
-    else
-        return decode_u32(first, last, cp);
-}
-
-template <typename Input, std::invocable<char32_t> Putter>
-constexpr void decode(Input const& s, Putter put)
-{
-    using sv_type = typename string_traits<Input>::string_view_type;
-    using char_type = typename sv_type::value_type;
-    auto sv = as_string_view(s);
-
-    constexpr auto enc = encoding_of<char_type>();
-    auto f = sv.begin();
-    auto e = sv.end();
-    char32_t cp;
-    while (f != e) {
-        auto r = decode<enc>(f, e, cp);
-        if (r.ec == errc{})
-            put(cp);
-        f = r.it;
+        put((c >> 18) | 0xF0);
+        put(((c >> 12) & 0x3F) | 0x80);
+        put(((c >> 6) & 0x3F) | 0x80);
+        put((c & 0x3F) | 0x80);
     }
 }
 
-template <typename Input> inline auto decode(Input const& s) -> std::u32string
+template <typename T> void u16_to_codeunits(codepoint const& cp, std::invocable<T> auto put)
 {
-    auto ret = std::u32string{};
-    auto sv = as_string_view(s);
-    ret.reserve(sv.size());
-    decode(sv, [&ret](char32_t cp) { ret += cp; });
-    return ret;
-}
-
-template <typename Codeunit> struct decoder {
-    using codeunit = Codeunit;
-    static constexpr auto enc = encoding_of<codeunit>();
-
-    constexpr decoder(std::basic_string_view<codeunit> sv)
-        : pos{sv.data()}
-        , last{sv.data() + sv.size()}
-    {
-    }
-
-    constexpr auto empty() const -> bool { return pos == last; }
-
-    constexpr auto get() -> char32_t
-    {
-        auto ret = char32_t{};
-        auto dr = decode<enc>(pos, last, ret);
-        if (dr.ec == utf::errc::no_error) {
-            pos = dr.it;
-        }
-        else {
-            ret = replacement_char;
-            pos = last;
-        }
-        return ret;
-    }
-
-private:
-    Codeunit const* pos;
-    Codeunit const* last;
-};
-
-template <encoding Enc, typename Putter> constexpr void encode(char32_t cp, Putter put)
-{
-    if constexpr (Enc == encoding::utf8) {
-        if (cp < 0x80) {
-            put(cp);
-        }
-        else if (cp < 0x800) {
-            put((cp >> 6) | 0xc0);
-            put((cp & 0x3f) | 0x80);
-        }
-        else if (cp < 0x10000) {
-            put((cp >> 12) | 0xe0);
-            put(((cp >> 6) & 0x3f) | 0x80);
-            put((cp & 0x3f) | 0x80);
-        }
-        else {
-            put((cp >> 18) | 0xF0);
-            put(((cp >> 12) & 0x3F) | 0x80);
-            put(((cp >> 6) & 0x3F) | 0x80);
-            put((cp & 0x3F) | 0x80);
-        }
-    }
-    else if constexpr (Enc == encoding::utf16) {
-        if (cp < 0x10000) {
-            put(cp);
-        }
-        else {
-            cp -= 0x10000;
-            put(0xD800 | (cp >> 10));
-            put(0xDC00 | (cp & 0x3FF));
-        }
+    static_assert(sizeof(T) == 2);
+    auto c = cp.value; // shortcut
+    if (c < 0x10000) {
+        put(c);
     }
     else {
-        // assume Encoding == encoding::utf32
-        put(cp);
+        c -= 0x10000;
+        put(0xD800 | (c >> 10));
+        put(0xDC00 | (c & 0x3FF));
     }
 }
 
-template <typename Input32> inline auto encode_u8(Input32 const& inp) -> std::string
+template <typename T> void u32_to_codeunits(codepoint const& cp, std::invocable<T> auto put)
 {
-    static_assert(std::convertible_to<Input32, std::u32string_view>);
-    auto sv = std::u32string_view(inp);
-    auto ret = std::string{};
-    ret.reserve(sv.size());
-    for (auto cp : sv)
-        encode<encoding::utf8>(cp, [&ret](char cu) { ret += cu; });
-    return ret;
+    static_assert(sizeof(T) == 4);
+    put(cp.value);
 }
+
 
 } // namespace strings::utf

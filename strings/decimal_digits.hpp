@@ -4,7 +4,7 @@
 // DO NOT EDIT: Generated file
 // clang-format off
 
-namespace strings {
+namespace strings::unicode {
 
 constexpr auto decimal(char32_t c) -> unsigned {
 	constexpr auto nd = unsigned(-1);

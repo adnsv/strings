@@ -1,32 +1,55 @@
 #pragma once
 
+#include "codepoint.hpp"
 #include "fold_simple.hpp"
-#include "string_traits.hpp"
-#include "ascii.hpp"
-#include "utf.hpp"
-#include <string>
+#include <concepts>
 
 namespace strings {
 
-enum class folding { none, ascii, simple };
+namespace fold {
 
-template <folding Folding = folding::simple> constexpr auto fold(char32_t cp) -> char32_t
+constexpr auto ascii(codepoint cp) -> codepoint
 {
-    if constexpr (Folding == folding::simple)
-        cp = simple_fold(cp);
-    else if constexpr (Folding == folding::ascii) {
-        cp = ascii::lower(cp);
-    }
+    // from ascii upper 'A-Z' make ascii lower 'a-z'
+    return (cp.value - unsigned('A') < 26u) ? codepoint(cp.value + unsigned('a' - 'A')) : cp;
+}
+
+constexpr auto none(codepoint cp) -> codepoint
+{
+    // noop
     return cp;
 }
 
-template <typename Input, folding Folding = folding::simple>
-auto fold(Input const& s) -> std::u32string
+} // namespace fold
+
+[[nodiscard]] inline auto operator>>(codepoint_source auto&& s, codepoint_folding auto f)
 {
-    auto sv = as_string_view(s);
-    auto ret = std::u32string{};
-    utf::decode(sv, [&ret](char32_t cp) { ret += fold<Folding>(cp); });
-    return ret;
+    return [s = std::forward<decltype(s)>(s), f]() mutable {
+        auto c = s();
+        if (c.has_value())
+            c = f(*c);
+        return c;
+    };
+}
+
+[[nodiscard]] inline auto operator>>(string_like_input auto&& s, codepoint_folding auto f)
+{
+    return utf::make_decoder(s) >> f;
+}
+
+inline void operator>>(codepoint_source auto&& src, codepoint_sink auto&& dst)
+{
+    auto c = src();
+    while (c) {
+        dst(*c);
+        c = src();
+    }
+}
+
+template <codeunit U> auto operator>>(codepoint_source auto&& src, std::basic_string<U>&& dst) -> std::basic_string<U>
+{
+    src >> utf::make_encoder(dst);
+    return dst;
 }
 
 } // namespace strings
