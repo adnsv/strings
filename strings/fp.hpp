@@ -347,7 +347,6 @@ inline auto to_chars(char* first, char* last, T const v, settings const& setting
 //
 // minimum recommended capacity to use with fp_to_chars methods
 //
-//
 constexpr std::size_t to_chars_buffer_cap = 128;
 
 static const auto badval = std::string{"####"};
@@ -370,24 +369,6 @@ inline auto to_string(T const v, settings const& settings, locale const& locale)
     if (r.ec == std::errc{})
         return std::string(buf, r.ptr);
     return badval;
-}
-
-// format_fp
-//
-// consider using fp_to_string for more flexible versions of this code
-//
-template <std::floating_point T> auto format_fp(T const v, int prec, bool trim = true) -> std::string
-{
-    char buf[fp::to_chars_buffer_cap];
-    auto [p, ec] = std::to_chars(buf, buf + to_chars_buffer_cap, v, std::chars_format::fixed, prec);
-    if (ec != std::errc{})
-        return badval;
-    auto s = std::string_view{buf, p};
-
-    if (trim)
-        s = s.substr(0, detail::find_trim_pos(s));
-
-    return std::string{s};
 }
 
 } // namespace strings::fp
