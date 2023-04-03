@@ -1,6 +1,8 @@
 #pragma once
 
+#include "fmtspec.hpp"
 #include "fp.hpp"
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <string>
@@ -63,7 +65,7 @@ struct writer_base {
     auto string() const -> std::string { return std::string{first_, size()}; }
     // constexpr auto string_view() -> std::string_view { return {_first, size()}; }
 
-    constexpr auto write(std::string_view const& sv)
+    constexpr auto write(std::string_view const& sv) -> std::errc
     {
         if (sv.empty())
             return std::errc{};
@@ -79,46 +81,19 @@ struct writer_base {
         }
     }
 
+    constexpr auto write_codeunit(char codeunit) -> std::errc
+    {
+        if (cursor_ == last_)
+            return std::errc::value_too_large;
+        *cursor_++ = codeunit;
+        return std::errc{};
+    }
+
     template <typename T>
     requires(!std::same_as<T, std::string_view> && std::convertible_to<T, std::string_view> && !writer::writable<T>)
     constexpr auto write(T const& s)
     {
         return write(std::string_view(s));
-    }
-
-    template <typename T>
-    requires(std::integral<T> && !writer::writable<T>)
-    auto write(T const value)
-    {
-        return check(std::to_chars(cursor_, last_, value));
-    }
-
-    template <typename T>
-    requires(std::integral<T> && !writer::writable<T, int>)
-    auto write(T const value, int base)
-    {
-        return check(std::to_chars(cursor_, last_, value, base));
-    }
-
-    template <typename T>
-    requires(std::floating_point<T> && !writer::writable<T>)
-    auto write(T const value)
-    {
-        return check(std::to_chars(cursor_, last_, value));
-    }
-
-    template <typename T>
-    requires(std::floating_point<T> && !writer::writable<T, std::chars_format>)
-    auto write(T const value, std::chars_format fmt)
-    {
-        return check(std::to_chars(cursor_, last_, value, fmt));
-    }
-
-    template <typename T>
-    requires(std::floating_point<T> && !writer::writable<T, std::chars_format, int>)
-    auto write(T const value, std::chars_format fmt, int precision)
-    {
-        return check(std::to_chars(cursor_, last_, value, fmt, precision));
     }
 
     template <typename T, typename... Args>
@@ -137,20 +112,25 @@ struct writer_base {
         return check(to_chars(cursor_, last_, value, static_cast<Args&&>(args)...));
     }
 
-    template <typename... Ts> void print(Ts&&... values) { (write(static_cast<Ts&&>(values)), ...); }
+    template <typename... Ts> constexpr auto format(std::string_view spec, Ts&&... values) -> std::errc;
 
-    template <typename T>
-    requires(writer::supported_type<T> || std::convertible_to<T, std::string_view>)
-    auto operator<<(T&& v) -> writer_base&
-    {
-        write(static_cast<T&&>(v));
-        return *this;
-    }
+    template <typename T> constexpr auto vfmt(T const& v, std::optional<fmtarg> const& fmt) -> std::errc;
+
+    // template <typename... Ts> void print(Ts&&... values) { (write(static_cast<Ts&&>(values)), ...); }
+
+    // template <typename T>
+    // requires(writer::supported_type<T> || std::convertible_to<T, std::string_view>)
+    // auto operator<<(T&& v) -> writer_base&
+    //{
+    //     write(static_cast<T&&>(v));
+    //     return *this;
+    // }
 
 protected:
     char* cursor_ = nullptr;
     char* first_ = nullptr;
     char* last_ = nullptr;
+    fp::locale fp_locale = fp::locale::ascii('.');
 
 private:
     constexpr auto check(std::to_chars_result const& cr) -> std::errc
@@ -211,5 +191,223 @@ template <std::size_t StorageCapacity = RuntimeCapacity> struct builder : public
 private:
     storage_type buf_;
 };
+
+namespace detail {
+constexpr auto mk_printf(fmtarg const& f)
+{
+    auto r = std::array<char, 8>{};
+    char* p = r.data();
+    *p++ = '%';
+    if (f.sign != '-')
+        *p++ = f.sign;
+    if (f.alternate_form)
+        *p++ = '#';
+    if (f.width >= 0)
+        *p++ = '*';
+    if (f.precision >= 0) {
+        *p++ = '.';
+        *p++ = '*';
+    }
+    *p++ = f.type;
+    *p++ = 0;
+    return r;
+}
+} // namespace detail
+
+template <typename T> constexpr auto writer_base::vfmt(T const& v, std::optional<fmtarg> const& fmt) -> std::errc
+{
+    if (!fmt) {
+        // default formatting
+        if constexpr (std::convertible_to<T, std::string_view>)
+            return write(v);
+        else if constexpr (std::integral<T>)
+            return write(v);
+        else if constexpr (std::floating_point<T>)
+            return write(v);
+        else
+            return std::errc::not_supported;
+    }
+    else if constexpr (std::convertible_to<T, std::string_view>) {
+        if (fmt->type != ' ' && fmt->type != 's')
+            return std::errc::invalid_argument;
+        else
+            return write(v);
+    }
+    else if constexpr (std::integral<T>) {
+        if (v == T(0)) {
+            write_codeunit('0');
+            return std::errc{};
+        }
+        switch (fmt->type) {
+        case 'd':
+            return write(v);
+        default:
+            return std::errc::not_supported;
+        }
+    }
+    else if constexpr (std::floating_point<T>) {
+        if (v == T(0)) {
+            write_codeunit('0');
+            return std::errc{};
+        }
+        auto const t = fmt->type;
+        constexpr auto supported_types = std::string_view{"eEfFgGaA"};
+        if (supported_types.find(t) == std::string_view::npos)
+            return std::errc::not_supported;
+
+        auto const nmax = last_ - cursor_;
+        auto const f = detail::mk_printf(*fmt);
+
+        int n;
+        if (fmt->width < 0 && fmt->precision < 0)
+            n = std::snprintf(cursor_, nmax, f.data(), v);
+        else if (fmt->precision < 0)
+            n = std::snprintf(cursor_, nmax, f.data(), fmt->width, v);
+        else if (fmt->width < 0)
+            n = std::snprintf(cursor_, nmax, f.data(), fmt->precision, v);
+        else
+            n = std::snprintf(cursor_, nmax, f.data(), fmt->width, fmt->precision, v);
+
+        if (n <= 0)
+            return std::errc::value_too_large;
+
+        
+
+        cursor_ += n;
+        return std::errc{};
+    }
+    return std::errc::not_supported;
+}
+
+template <typename... Ts> constexpr auto writer_base::format(std::string_view spec, Ts&&... args) -> std::errc
+{
+    auto arg_index = std::size_t{0};
+    constexpr auto arg_count = sizeof...(args);
+
+    auto t = std::forward_as_tuple(args...);
+
+    while (!spec.empty()) {
+        auto p = std::size_t{0};
+        auto const n = spec.size();
+        while (p < n)
+            if (spec[p] == '{' || spec[p] == '}')
+                break;
+            else
+                ++p;
+
+        if (p) {
+            if (auto ec = write(spec.substr(0, p)); ec != std::errc{})
+                return ec;
+            spec.remove_prefix(p);
+            if (spec.empty())
+                return std::errc{};
+        }
+
+        if (spec.size() < 2)
+            return std::errc::invalid_argument;
+
+        if (spec[0] == '}') {
+            if (spec[1] != '}')
+                return std::errc::invalid_argument;
+            if (auto ec = write_codeunit('}'); ec != std::errc{})
+                return ec;
+            spec.remove_prefix(2);
+            continue;
+        }
+
+        if (spec[1] == '{') {
+            if (auto ec = write_codeunit('{'); ec != std::errc{})
+                return ec;
+            spec.remove_prefix(2);
+            continue;
+        }
+
+        spec.remove_prefix(1);
+        auto argspec = std::optional<fmtarg>{};
+
+        // have an opening curly brace
+        if (spec[0] == '}') {
+            // default formatting
+            spec.remove_prefix(1);
+        }
+        else {
+            // fmtlib-like spec
+            auto& ref = argspec.emplace();
+            auto [pos, ec] = parse_fmt_arg(spec.data(), spec.data() + spec.size(), ref);
+            if (ec != std::errc{})
+                return ec;
+            spec.remove_prefix(pos - spec.data());
+            if (ref.index >= 0)
+                arg_index = ref.index;
+        }
+
+        switch (arg_index) {
+        case 0:
+            if constexpr (arg_count < 1)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<0>(t), argspec);
+            break;
+        case 1:
+            if constexpr (arg_count < 2)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<1>(t), argspec);
+            break;
+        case 2:
+            if constexpr (arg_count < 3)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<2>(t), argspec);
+            break;
+        case 3:
+            if constexpr (arg_count < 4)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<3>(t), argspec);
+            break;
+        case 4:
+            if constexpr (arg_count < 5)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<4>(t), argspec);
+            break;
+        case 5:
+            if constexpr (arg_count < 6)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<5>(t), argspec);
+            break;
+        case 6:
+            if constexpr (arg_count < 7)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<6>(t), argspec);
+            break;
+        case 7:
+            if constexpr (arg_count < 8)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<7>(t), argspec);
+            break;
+        case 8:
+            if constexpr (arg_count < 9)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<8>(t), argspec);
+            break;
+        case 9:
+            if constexpr (arg_count < 10)
+                return std::errc::invalid_argument;
+            else
+                vfmt(std::get<9>(t), argspec);
+            break;
+
+        default:
+            return std::errc::invalid_argument;
+        }
+    }
+    return std::errc{};
+}
 
 } // namespace strings

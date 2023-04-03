@@ -3,9 +3,9 @@
 #include "ascii.hpp"
 #include <algorithm>
 #include <charconv>
+#include <clocale>
 #include <cmath>
 #include <concepts>
-#include <clocale>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -61,8 +61,9 @@ struct locale : public appearance::separators,
 
     constexpr locale() noexcept = default;
 
-    static constexpr auto ascii(char decimal = '.') { 
-        auto ret = locale{}; 
+    static constexpr auto ascii(char decimal = '.')
+    {
+        auto ret = locale{};
         ret.decimal = decimal;
         return ret;
     }
@@ -244,7 +245,7 @@ inline auto for_trimming_(char* first, char* last, T const v, settings const& se
 
     auto sv = std::string_view{first, std::size_t(ret.ptr - first)};
 
-    if (fmt == std::chars_format::scientific) {
+    if (fmt == std::chars_format::scientific || fmt == std::chars_format::general) {
         exp_pos = sv.find("e");
         sv = sv.substr(0, exp_pos);
     }
@@ -272,8 +273,7 @@ inline auto to_chars(char* first, char* last, T const v, settings const& setting
         return r;
     }
 
-    auto exp = detail::sci_exp_value(
-        std::string_view{first + exp_pos, std::size_t(r.ptr - (first + exp_pos))});
+    auto exp = detail::sci_exp_value(std::string_view{first + exp_pos, std::size_t(r.ptr - (first + exp_pos))});
     if (!exp)
         return r;
     r.ptr = first + exp_pos;
