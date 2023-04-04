@@ -6,12 +6,12 @@
 namespace strings {
 
 struct fmtarg {
-    char align = ' ';            // "<" | ">" | "^" (" " if unspecified)
+    char align = ' ';            // (ignored) "<" | ">" | "^" (" " if unspecified)
     char sign = '-';             // "+" | "-" | " "
-    bool alternate_form = false; // "#"
     bool zero_padding = false;   // "0"
-    int width = -1;
+    int width = 0;
     int precision = -1;
+    bool alternate_form = false; // "#"
     bool use_locale = false;
     char type = ' ';
 };

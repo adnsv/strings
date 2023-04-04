@@ -5,6 +5,7 @@
 #include <array>
 #include <charconv>
 #include <concepts>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -116,12 +117,12 @@ protected:
     char* first_ = nullptr;
     char* last_ = nullptr;
 
-    int default_fp_precision = 6;
-    char default_fp_decimal = '.';
+    char fp_decimal = '.';
 
-    // fp::locale fp_locale = fp::locale::ascii('.');
+    constexpr void mk_printf_spec(
+        fmtarg const& fmt, char const* sizespec, char t, char* buf, int override_precision = -1);
 
-    template <typename T> constexpr auto vfmt(T const& v, fmtarg&& fmt) -> std::errc;
+    template <typename T> constexpr auto vfmt(T const& v, fmtarg const& fmt) -> std::errc;
 
 private:
     constexpr auto check(std::to_chars_result const& cr) -> std::errc
@@ -183,29 +184,42 @@ private:
     storage_type buf_;
 };
 
-namespace detail {
-constexpr auto mk_printf(fmtarg const& f)
+constexpr void writer_base::mk_printf_spec(
+    fmtarg const& fmt, char const* size_spec, char t, char* buf, int override_precision)
 {
-    auto r = std::array<char, 8>{};
-    char* p = r.data();
-    *p++ = '%';
-    if (f.sign != '-')
-        *p++ = f.sign;
-    if (f.alternate_form)
-        *p++ = '#';
-    if (f.width >= 0)
-        *p++ = '*';
-    if (f.precision >= 0) {
-        *p++ = '.';
-        *p++ = '*';
-    }
-    *p++ = f.type;
-    *p++ = 0;
-    return r;
-}
-} // namespace detail
+    *buf++ = '%';
+    if (fmt.sign != '-')
+        *buf++ = fmt.sign;
+    if (fmt.alternate_form)
+        *buf++ = '#';
+    if (fmt.zero_padding)
+        *buf++ = '0';
 
-template <typename T> constexpr auto writer_base::vfmt(T const& v, fmtarg&& fmt) -> std::errc
+    auto const w = fmt.width;
+    auto const p = override_precision >= 0 ? override_precision : fmt.precision;
+
+    if (w > 0 && w < 100) {
+        if (w >= 10)
+            *buf++ = '0' + w / 10;
+        *buf++ = '0' + w % 10;
+    }
+
+    if (p >= 0 && p < 100) {
+        *buf++ = '.';
+        if (p >= 10)
+            *buf++ = '0' + p / 10;
+        *buf++ = '0' + p % 10;
+    }
+
+    if (size_spec)
+        while (*size_spec)
+            *buf++ = *size_spec++;
+
+    *buf++ = t;
+    *buf++ = 0;
+}
+
+template <typename T> constexpr auto writer_base::vfmt(T const& v, fmtarg const& fmt) -> std::errc
 {
     if constexpr (std::convertible_to<T, std::string_view>) {
         if (fmt.type != ' ' && fmt.type != 's')
@@ -214,18 +228,29 @@ template <typename T> constexpr auto writer_base::vfmt(T const& v, fmtarg&& fmt)
             return write(v);
     }
     else if constexpr (std::integral<T>) {
-        if (v == T(0)) {
-            write_codeunit('0');
-            return std::errc{};
+        char pfspec[32];
+        if constexpr (std::signed_integral<T>) {
+            char const* sizespec = sizeof(T) == sizeof(long long)     ? "ll"
+                                   : sizeof(T) == sizeof(long)        ? "l"
+                                   : sizeof(T) == sizeof(short)       ? "h"
+                                   : sizeof(T) == sizeof(signed char) ? "hh"
+                                                                      : nullptr;
+            mk_printf_spec(fmt, nullptr, 'd', pfspec);
         }
-        if (fmt.type == ' ')
-            fmt.type = 'd';
-        switch (fmt.type) {
-        case 'd':
-            return write(v);
-        default:
-            return std::errc::not_supported;
+        else {
+            char const* sizespec = sizeof(T) == sizeof(unsigned long long) ? "ll"
+                                   : sizeof(T) == sizeof(unsigned long)    ? "l"
+                                   : sizeof(T) == sizeof(unsigned short)   ? "h"
+                                   : sizeof(T) == sizeof(unsigned char)    ? "hh"
+                                                                           : nullptr;
+            mk_printf_spec(fmt, sizespec, 'u', pfspec);
         }
+
+        auto n = std::snprintf(cursor_, last_ - cursor_, pfspec, v);
+        if (n <= 0)
+            return std::errc::value_too_large;
+        cursor_ += n;
+        return std::errc{};
     }
     else if constexpr (std::floating_point<T>) {
         if (auto fpc = std::fpclassify(v); fpc == FP_ZERO) {
@@ -233,29 +258,26 @@ template <typename T> constexpr auto writer_base::vfmt(T const& v, fmtarg&& fmt)
             return std::errc{};
         }
 
-        if (fmt.type == ' ')
-            fmt.type = 'f';
-
-        auto const t = fmt.type;
-        constexpr auto supported_types = std::string_view{"eEfFgGaA"};
-        if (supported_types.find(t) == std::string_view::npos)
+        auto const auto_precision = fmt.type == ' ';
+        auto const precision = auto_precision ? std::numeric_limits<T>::max_digits10 - 1 : fmt.precision;
+        auto const t = fmt.type == ' ' ? 'g' : fmt.type;
+        if (std::string_view{"eEfFgGaA"}.find(t) == std::string_view::npos)
             return std::errc::not_supported;
 
-        auto const nmax = last_ - cursor_;
-        auto const f = detail::mk_printf(fmt);
+        char const* sizespec = sizeof(T) == sizeof(long double) ? "L" : nullptr;
 
-        int n;
-        if (fmt.width < 0 && fmt.precision < 0)
-            n = std::snprintf(cursor_, nmax, f.data(), v);
-        else if (fmt.precision < 0)
-            n = std::snprintf(cursor_, nmax, f.data(), fmt.width, v);
-        else if (fmt.width < 0)
-            n = std::snprintf(cursor_, nmax, f.data(), fmt.precision, v);
-        else
-            n = std::snprintf(cursor_, nmax, f.data(), fmt.width, fmt.precision, v);
-
+        char pfspec[32];
+        mk_printf_spec(fmt, sizespec, t, pfspec, precision);
+        auto n = std::snprintf(cursor_, last_ - cursor_, pfspec, v);
         if (n <= 0)
             return std::errc::value_too_large;
+
+        if (fp_decimal != '.')
+            for (auto i = 0; i < n; ++i)
+                if (cursor_[i] == '.') {
+                    cursor_[i] = fp_decimal;
+                    break;
+                }
 
         cursor_ += n;
         return std::errc{};
@@ -327,66 +349,67 @@ template <typename... Ts> constexpr auto writer_base::format(std::string_view sp
             if constexpr (arg_count < 1)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<0>(t), std::move(argspec));
+                vfmt(std::get<0>(t), argspec);
             break;
         case 1:
             if constexpr (arg_count < 2)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<1>(t), std::move(argspec));
+                vfmt(std::get<1>(t), argspec);
             break;
         case 2:
             if constexpr (arg_count < 3)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<2>(t), std::move(argspec));
+                vfmt(std::get<2>(t), argspec);
             break;
         case 3:
             if constexpr (arg_count < 4)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<3>(t), std::move(argspec));
+                vfmt(std::get<3>(t), argspec);
             break;
         case 4:
             if constexpr (arg_count < 5)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<4>(t), std::move(argspec));
+                vfmt(std::get<4>(t), argspec);
             break;
         case 5:
             if constexpr (arg_count < 6)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<5>(t), std::move(argspec));
+                vfmt(std::get<5>(t), argspec);
             break;
         case 6:
             if constexpr (arg_count < 7)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<6>(t), std::move(argspec));
+                vfmt(std::get<6>(t), argspec);
             break;
         case 7:
             if constexpr (arg_count < 8)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<7>(t), std::move(argspec));
+                vfmt(std::get<7>(t), argspec);
             break;
         case 8:
             if constexpr (arg_count < 9)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<8>(t), std::move(argspec));
+                vfmt(std::get<8>(t), argspec);
             break;
         case 9:
             if constexpr (arg_count < 10)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<9>(t), std::move(argspec));
+                vfmt(std::get<9>(t), argspec);
             break;
 
         default:
             return std::errc::invalid_argument;
         }
+        ++arg_index;
     }
     return std::errc{};
 }
