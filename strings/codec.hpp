@@ -95,12 +95,12 @@ auto make_decoder(S&& s, std::optional<codepoint> replacement)
     using codeunit_type = codeunit_type_of<S>;
     constexpr auto enc = strings::utf::encoding_of<codeunit_type>;
     if constexpr (string_view_input<S>) {
-        using iter_type = S::iterator;
+        using iter_type = typename S::iterator;
         return decoder<enc, iter_type, iter_type>(s.begin(), s.end(), replacement);
     }
     else if constexpr (convertible_to_string_view_input<S>) {
         using sv_type = string_view_type_of<S>;
-        using iter_type = sv_type::iterator;
+        using iter_type = typename sv_type::iterator;
         auto sv = sv_type(s);
         return decoder<enc, iter_type, iter_type>(sv.begin(), sv.end(), replacement);
     }

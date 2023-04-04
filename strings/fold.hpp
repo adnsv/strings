@@ -11,7 +11,7 @@ namespace fold {
 constexpr auto ascii(codepoint cp) -> codepoint
 {
     // from ascii upper 'A-Z' make ascii lower 'a-z'
-    return (cp.value - unsigned('A') < 26u) ? codepoint(cp.value + unsigned('a' - 'A')) : cp;
+    return (cp.value - unsigned('A') < 26u) ? codepoint{cp.value + unsigned('a' - 'A')} : cp;
 }
 
 constexpr auto none(codepoint cp) -> codepoint

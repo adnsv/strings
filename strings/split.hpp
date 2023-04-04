@@ -15,7 +15,7 @@ requires
 void split(Input const& input, Separator const& separator, std::invocable<std::basic_string_view<U>> auto&& f)
 {
     using string_view_type = typename std::basic_string_view<U>;
-    using char_type = string_view_type::value_type;
+    using char_type = typename string_view_type::value_type;
     auto sv = string_view_type(input);
     auto sep = string_view_type(separator);
     auto cur = std::size_t{0};
@@ -33,7 +33,7 @@ void split(Input const& input, Separator const& separator, trimming_predicate au
     std::invocable<std::basic_string_view<U>> auto&& f)
 {
     using string_view_type = typename std::basic_string_view<U>;
-    using char_type = string_view_type::value_type;
+    using char_type = typename string_view_type::value_type;
     auto sv = string_view_type(input);
     auto sep = string_view_type(separator);
     auto cur = std::size_t{0};

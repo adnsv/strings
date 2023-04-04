@@ -5,6 +5,12 @@
 #include <ranges>
 #include <string_view>
 
+#ifndef STRINGS_APPLE_CLANG_RANGES
+#include <ranges>
+#else
+#include <__ranges/all.h>
+#endif
+
 namespace strings {
 
 // codepoint
@@ -14,6 +20,7 @@ namespace strings {
 struct codepoint {
     using carrier_type = char32_t;
     using difference_type = int;
+    
     char32_t value;
 
     constexpr auto operator++() -> codepoint& // pre

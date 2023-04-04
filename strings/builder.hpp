@@ -59,11 +59,8 @@ struct writer_base {
     }
 
     constexpr operator const std::string_view() const noexcept { return {first_, size()}; }
-    // constexpr operator std::string_view() noexcept { return {_first, size()}; }
-
     constexpr auto string_view() const -> std::string_view { return {first_, size()}; }
     auto string() const -> std::string { return std::string{first_, size()}; }
-    // constexpr auto string_view() -> std::string_view { return {_first, size()}; }
 
     constexpr auto write(std::string_view const& sv) -> std::errc
     {
@@ -114,23 +111,16 @@ struct writer_base {
 
     template <typename... Ts> constexpr auto format(std::string_view spec, Ts&&... values) -> std::errc;
 
-    template <typename T> constexpr auto vfmt(T const& v, std::optional<fmtarg> const& fmt) -> std::errc;
-
-    // template <typename... Ts> void print(Ts&&... values) { (write(static_cast<Ts&&>(values)), ...); }
-
-    // template <typename T>
-    // requires(writer::supported_type<T> || std::convertible_to<T, std::string_view>)
-    // auto operator<<(T&& v) -> writer_base&
-    //{
-    //     write(static_cast<T&&>(v));
-    //     return *this;
-    // }
-
 protected:
     char* cursor_ = nullptr;
     char* first_ = nullptr;
     char* last_ = nullptr;
+
+    int default_fp_precision = 6;
+
     fp::locale fp_locale = fp::locale::ascii('.');
+
+    template <typename T> constexpr auto vfmt(T const& v, std::optional<fmtarg> const& fmt) -> std::errc;
 
 private:
     constexpr auto check(std::to_chars_result const& cr) -> std::errc
@@ -270,6 +260,8 @@ template <typename T> constexpr auto writer_base::vfmt(T const& v, std::optional
 
         if (n <= 0)
             return std::errc::value_too_large;
+
+        
 
         
 

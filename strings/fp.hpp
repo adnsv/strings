@@ -120,38 +120,45 @@ constexpr auto digit_val(char c) -> int
 
 constexpr auto is_digit(char c) { return unsigned(c) - unsigned('0') < 10u; }
 
-inline auto find_trim_pos(std::string_view s) -> std::size_t
+inline auto find_trim_pos(char const* first, char const* last) -> char const*
 {
-    auto const n = s.size();
-    if (!n || s.back() != '0')
-        return npos;
-    auto o = s.find('.');
-    if (o >= n - 1)
-        return npos;
-    auto p = n - 2;
-    while (p > o && s[p] == '0')
-        --p;
-    if (p != o)
-        ++p;
-    return p;
+    if (first == last || last[-1] != '0')
+        return last;
+
+    for (; first != last; ++first)
+        if (*first == '.' || *first == ',')
+            break;
+
+    auto z = last;
+    while (z[-1] == '0')
+        --z;
+
+    if (z == first + 1)
+        return first;
+
+    ++first;
+    while (first != z && *first >= '0' && *first <= '9')
+        ++first;
+
+    return (first == z) ? z : last;
 }
 
-inline auto sci_exp_value(std::string_view s) -> std::optional<int>
+inline auto sci_exp_value(char const* first, char const* last) -> std::optional<int>
 {
-    auto const n = s.size();
-    if (n < 2 || s[0] != 'e' || !is_digit(s.back()))
+    auto const n = last - first;
+    if (n < 2 || first[0] != 'e' || !is_digit(last[-1]))
         return {};
     auto sign = 1;
-    auto p = 1;
-    if (s[p] == '+')
-        ++p;
-    else if (s[p] == '-') {
-        ++p;
+    ++first;
+    if (*first == '+')
+        ++first;
+    else if (*first == '-') {
+        ++first;
         sign = -1;
     }
     auto v = 0;
-    for (; p < n; ++p) {
-        auto d = digit_val(s[p]);
+    for (; first != last; ++first) {
+        auto d = digit_val(*first);
         if (d < 0)
             return {};
         v = v * 10 + d;
@@ -204,10 +211,10 @@ inline auto exp_to_chars(char* first, char* last, std::string_view prefix, int e
 }
 
 template <std::floating_point T>
-inline auto for_trimming_(char* first, char* last, T const v, settings const& settings, std::size_t& trim_pos,
+inline auto for_trimming_(char* first, char* last, T const v, settings const& settings, std::size_t& trm_pos,
     std::size_t& exp_pos) -> std::to_chars_result
 {
-    trim_pos = std::string_view::npos;
+    trm_pos = std::string_view::npos;
     exp_pos = std::string_view::npos;
 
     if (auto fpc = std::fpclassify(v); fpc == FP_ZERO) {
@@ -243,14 +250,19 @@ inline auto for_trimming_(char* first, char* last, T const v, settings const& se
     if (ret.ec != std::errc{})
         return ret;
 
-    auto sv = std::string_view{first, std::size_t(ret.ptr - first)};
-
+    auto const n = ret.ptr - first;
     if (fmt == std::chars_format::scientific || fmt == std::chars_format::general) {
-        exp_pos = sv.find("e");
-        sv = sv.substr(0, exp_pos);
+        exp_pos = 0;
+        while (exp_pos < n)
+            if (first[exp_pos] == 'e' || first[exp_pos] == 'E')
+                break;
+            else
+                ++exp_pos;
     }
+    else
+        exp_pos = n;
 
-    trim_pos = find_trim_pos(sv);
+    trm_pos = find_trim_pos(first, first + exp_pos) - first;
     return ret;
 }
 
@@ -262,23 +274,21 @@ inline auto to_chars(char* first, char* last, T const v, settings const& setting
 {
     std::size_t trim_pos, exp_pos;
     auto r = detail::for_trimming_(first, last, v, settings, trim_pos, exp_pos);
-    if (!trim || r.ec != std::errc{})
+    if (!trim || r.ec != std::errc{} || exp_pos == std::string_view::npos)
         return r;
 
-    constexpr auto npos = std::string_view::npos;
-
-    if (exp_pos == npos) {
-        if (trim_pos != npos)
+    if (first + exp_pos == r.ptr) {
+        if (first + trim_pos != r.ptr)
             r.ptr = first + trim_pos;
         return r;
     }
 
-    auto exp = detail::sci_exp_value(std::string_view{first + exp_pos, std::size_t(r.ptr - (first + exp_pos))});
+    auto exp = detail::sci_exp_value(first + exp_pos, r.ptr);
     if (!exp)
         return r;
     r.ptr = first + exp_pos;
 
-    if (trim_pos != npos)
+    if (first + trim_pos != last)
         r.ptr = first + trim_pos;
     if (*exp == 0)
         return r; // trim zero exponents, e.g. "e+00"
@@ -311,25 +321,20 @@ inline auto to_chars(char* first, char* last, T const v, settings const& setting
     if (r.ec != std::errc{})
         return r;
 
-    constexpr auto npos = std::string_view::npos;
-
     if (locale.decimal != '.')
-        if (auto p = std::string_view{first, r.ptr}.find('.'); p != npos)
+        if (auto p = std::string_view{first, std::size_t(r.ptr - first)}.find('.'); p != std::string_view::npos)
             first[p] = locale.decimal;
 
-    if (exp_pos == npos) {
-        if (trim_pos != npos)
+    if (first + exp_pos == r.ptr) {
+        if (first + trim_pos != r.ptr)
             r.ptr = first + trim_pos;
         return r;
     }
 
-    auto exp = detail::sci_exp_value({first + exp_pos, r.ptr});
+    auto exp = detail::sci_exp_value(first + exp_pos, r.ptr);
     if (!exp)
         return r;
-    r.ptr = first + exp_pos;
-
-    if (trim_pos != npos)
-        r.ptr = first + trim_pos;
+    r.ptr = first + trim_pos;
     if (*exp == 0)
         return r; // trim zero exponents, e.g. "e+00"
 

@@ -36,7 +36,7 @@ constexpr auto u8_to_codepoint(Iter first, Sentinel last, codepoint& output, une
 
     if (c0 < 0b10000000u) {
         // 1-byte sequence [U+0000..U+007F]
-        output = codepoint(c0);
+        output = codepoint{c0};
         return first;
     }
 
@@ -66,10 +66,10 @@ constexpr auto u8_to_codepoint(Iter first, Sentinel last, codepoint& output, une
     ++first;
     if (c0 < 0b11100000u) {
         // 2-byte sequence [U+0080..U+07FF]
-        output = codepoint(             //
+        output = codepoint{
             ((c0 & 0b00011111) << 06) | // #1
             (c2 & trail_mask)           // #2
-        );
+        };
         if (output.value < 0x80)
             output = errcp::overlong;
         return first;
@@ -86,11 +86,11 @@ constexpr auto u8_to_codepoint(Iter first, Sentinel last, codepoint& output, une
     ++first;
     if (c0 < 0b11110000u) {
         // 3-byte sequence [U+00800..U+FFFF]
-        output = codepoint(             //
+        output = codepoint{
             ((c0 & 0b00001111) << 12) | // #1
             ((c2 & trail_mask) << 06) | // #2
             (c3 & trail_mask)           // #3
-        );
+        };
         if (output.value < 0x800)
             output = errcp::overlong;
         return first;
@@ -107,12 +107,12 @@ constexpr auto u8_to_codepoint(Iter first, Sentinel last, codepoint& output, une
     ++first;
     if (c0 < 0b11111000u) {
         // 4-byte sequence [U+00010000..U+001FFFFF]
-        output = codepoint(             //
+        output = codepoint{
             ((c0 & 0b00000111) << 18) | // #1
             ((c2 & trail_mask) << 12) | // #2
             ((c3 & trail_mask) << 06) | // #3
             (c4 & trail_mask)           // #4
-        );
+        };
         if (output.value < 0x00010000)
             output = errcp::overlong;
         return first;
@@ -129,13 +129,13 @@ constexpr auto u8_to_codepoint(Iter first, Sentinel last, codepoint& output, une
     ++first;
     if (c0 < 0b11111100u) {
         // 5-byte sequence [U+00200000..U+03FFFFFF]
-        output = codepoint(             //
+        output = codepoint{
             ((c0 & 0b00000011) << 24) | // #1
             ((c2 & trail_mask) << 18) | // #2
             ((c3 & trail_mask) << 12) | // #3
             ((c4 & trail_mask) << 06) | // #4
             (c5 & trail_mask)           // #5
-        );
+        };
         if (output.value < 0x00200000)
             output = errcp::overlong;
         return first;
@@ -151,14 +151,14 @@ constexpr auto u8_to_codepoint(Iter first, Sentinel last, codepoint& output, une
     }
     ++first;
     // 6-byte sequence [U+04000000..U+7FFFFFFF]
-    output = codepoint(             //
+    output = codepoint{
         ((c0 & 0b00000001) << 30) | // #1
         ((c2 & trail_mask) << 24) | // #2
         ((c3 & trail_mask) << 18) | // #3
         ((c4 & trail_mask) << 12) | // #4
         ((c5 & trail_mask) << 06) | // #5
         (c6 & trail_mask)           // #6
-    );
+    };
     if (output.value < 0x04000000)
         output = errcp::overlong;
     return first;
@@ -186,7 +186,7 @@ constexpr auto u16_to_codepoint(Iter first, Sentinel last, codepoint& output, un
     if (c0 >= unicode::low_surrogate_first.value) {
         output = errcp::unexpected;
         if (utp == unexpected_policy::consume_all)
-            while (first != last && unicode::is_low_surrogate(codepoint(cp(cu(*first)))))
+            while (first != last && unicode::is_low_surrogate(codepoint{cp(cu(*first))}))
                 ++first;
         return first;
     }
@@ -195,12 +195,12 @@ constexpr auto u16_to_codepoint(Iter first, Sentinel last, codepoint& output, un
 
     // must be followed by a low surrogate
     auto c1 = cp(cu(*first));
-    if (!unicode::is_low_surrogate(codepoint(c1))) {
+    if (!unicode::is_low_surrogate(codepoint{c1})) {
         output = errcp::incomplete;
         return first;
     }
 
-    output = codepoint((((c0 & 0x3FFu) << 10) | (c1 & 0x3FFu)) + 0x10000);
+    output = codepoint{(((c0 & 0x3FFu) << 10) | (c1 & 0x3FFu)) + 0x10000};
     ++first;
     return first;
 }
@@ -212,7 +212,7 @@ constexpr auto u32_to_codepoint(Iter first, Sentinel last, codepoint& output, un
     using cu = std::make_unsigned_t<std::iter_value_t<Iter>>;
     static_assert(sizeof(cu) == 4);
 
-    output = (first == last) ? output = errcp::insufficient : output = codepoint(cp(cu(*first++)));
+    output = (first == last) ? output = errcp::insufficient : output = codepoint{cp(cu(*first++))};
     return first;
 }
 
@@ -259,6 +259,5 @@ template <typename T> void u32_to_codeunits(codepoint const& cp, std::invocable<
     static_assert(sizeof(T) == 4);
     put(cp.value);
 }
-
 
 } // namespace strings::utf
