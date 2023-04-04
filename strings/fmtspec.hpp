@@ -6,7 +6,6 @@
 namespace strings {
 
 struct fmtarg {
-    int index = -1;
     char align = ' ';            // "<" | ">" | "^" (" " if unspecified)
     char sign = '-';             // "+" | "-" | " "
     bool alternate_form = false; // "#"
@@ -17,7 +16,7 @@ struct fmtarg {
     char type = ' ';
 };
 
-constexpr auto parse_fmt_arg(char const* first, char const* last, fmtarg& arg) -> std::from_chars_result
+constexpr auto parse_fmt_arg(char const* first, char const* last, std::size_t& idx, fmtarg& arg) -> std::from_chars_result
 {
     if (first == last)
         return {first, std::errc::invalid_argument};
@@ -45,9 +44,12 @@ constexpr auto parse_fmt_arg(char const* first, char const* last, fmtarg& arg) -
     };
 
     // arg_id, only integers are supported at this point
-    arg.index = read_int();
-    if (arg.index >= 0 && first == last)
-        return {first, std::errc::invalid_argument};
+    if (auto i = read_int(); i >= 0) {
+        idx = std::size_t(i);
+        if (first == last)
+            return {first, std::errc::invalid_argument};
+    }
+
     if (*first == ':') {
         // read format spec
         ++first;
@@ -80,14 +82,16 @@ constexpr auto parse_fmt_arg(char const* first, char const* last, fmtarg& arg) -
                 return {first, std::errc::invalid_argument};
         }
 
-        arg.width = read_int(); // only numeric widths are currently supported
-        if (arg.width >= 0 && first == last)
-            return {first, std::errc::invalid_argument};
+        if (auto v = read_int(); v >= 0) {
+            arg.width = v; // only numeric widths are currently supported
+            if (first == last)
+                return {first, std::errc::invalid_argument};
+        }
 
         if (*first == '.') {
             ++first;
             arg.precision = read_int(); // only numeric precisions are currently supported
-            if (arg.precision < 0)
+            if (arg.precision < 0 || first == last)
                 return {first, std::errc::invalid_argument};
         }
 

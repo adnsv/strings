@@ -117,10 +117,11 @@ protected:
     char* last_ = nullptr;
 
     int default_fp_precision = 6;
+    char default_fp_decimal = '.';
 
-    fp::locale fp_locale = fp::locale::ascii('.');
+    // fp::locale fp_locale = fp::locale::ascii('.');
 
-    template <typename T> constexpr auto vfmt(T const& v, std::optional<fmtarg> const& fmt) -> std::errc;
+    template <typename T> constexpr auto vfmt(T const& v, fmtarg&& fmt) -> std::errc;
 
 private:
     constexpr auto check(std::to_chars_result const& cr) -> std::errc
@@ -204,21 +205,10 @@ constexpr auto mk_printf(fmtarg const& f)
 }
 } // namespace detail
 
-template <typename T> constexpr auto writer_base::vfmt(T const& v, std::optional<fmtarg> const& fmt) -> std::errc
+template <typename T> constexpr auto writer_base::vfmt(T const& v, fmtarg&& fmt) -> std::errc
 {
-    if (!fmt) {
-        // default formatting
-        if constexpr (std::convertible_to<T, std::string_view>)
-            return write(v);
-        else if constexpr (std::integral<T>)
-            return write(v);
-        else if constexpr (std::floating_point<T>)
-            return write(v);
-        else
-            return std::errc::not_supported;
-    }
-    else if constexpr (std::convertible_to<T, std::string_view>) {
-        if (fmt->type != ' ' && fmt->type != 's')
+    if constexpr (std::convertible_to<T, std::string_view>) {
+        if (fmt.type != ' ' && fmt.type != 's')
             return std::errc::invalid_argument;
         else
             return write(v);
@@ -228,7 +218,9 @@ template <typename T> constexpr auto writer_base::vfmt(T const& v, std::optional
             write_codeunit('0');
             return std::errc{};
         }
-        switch (fmt->type) {
+        if (fmt.type == ' ')
+            fmt.type = 'd';
+        switch (fmt.type) {
         case 'd':
             return write(v);
         default:
@@ -236,34 +228,34 @@ template <typename T> constexpr auto writer_base::vfmt(T const& v, std::optional
         }
     }
     else if constexpr (std::floating_point<T>) {
-        if (v == T(0)) {
+        if (auto fpc = std::fpclassify(v); fpc == FP_ZERO) {
             write_codeunit('0');
             return std::errc{};
         }
-        auto const t = fmt->type;
+
+        if (fmt.type == ' ')
+            fmt.type = 'f';
+
+        auto const t = fmt.type;
         constexpr auto supported_types = std::string_view{"eEfFgGaA"};
         if (supported_types.find(t) == std::string_view::npos)
             return std::errc::not_supported;
 
         auto const nmax = last_ - cursor_;
-        auto const f = detail::mk_printf(*fmt);
+        auto const f = detail::mk_printf(fmt);
 
         int n;
-        if (fmt->width < 0 && fmt->precision < 0)
+        if (fmt.width < 0 && fmt.precision < 0)
             n = std::snprintf(cursor_, nmax, f.data(), v);
-        else if (fmt->precision < 0)
-            n = std::snprintf(cursor_, nmax, f.data(), fmt->width, v);
-        else if (fmt->width < 0)
-            n = std::snprintf(cursor_, nmax, f.data(), fmt->precision, v);
+        else if (fmt.precision < 0)
+            n = std::snprintf(cursor_, nmax, f.data(), fmt.width, v);
+        else if (fmt.width < 0)
+            n = std::snprintf(cursor_, nmax, f.data(), fmt.precision, v);
         else
-            n = std::snprintf(cursor_, nmax, f.data(), fmt->width, fmt->precision, v);
+            n = std::snprintf(cursor_, nmax, f.data(), fmt.width, fmt.precision, v);
 
         if (n <= 0)
             return std::errc::value_too_large;
-
-        
-
-        
 
         cursor_ += n;
         return std::errc{};
@@ -315,7 +307,7 @@ template <typename... Ts> constexpr auto writer_base::format(std::string_view sp
         }
 
         spec.remove_prefix(1);
-        auto argspec = std::optional<fmtarg>{};
+        auto argspec = fmtarg{};
 
         // have an opening curly brace
         if (spec[0] == '}') {
@@ -324,13 +316,10 @@ template <typename... Ts> constexpr auto writer_base::format(std::string_view sp
         }
         else {
             // fmtlib-like spec
-            auto& ref = argspec.emplace();
-            auto [pos, ec] = parse_fmt_arg(spec.data(), spec.data() + spec.size(), ref);
+            auto [pos, ec] = parse_fmt_arg(spec.data(), spec.data() + spec.size(), arg_index, argspec);
             if (ec != std::errc{})
                 return ec;
             spec.remove_prefix(pos - spec.data());
-            if (ref.index >= 0)
-                arg_index = ref.index;
         }
 
         switch (arg_index) {
@@ -338,61 +327,61 @@ template <typename... Ts> constexpr auto writer_base::format(std::string_view sp
             if constexpr (arg_count < 1)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<0>(t), argspec);
+                vfmt(std::get<0>(t), std::move(argspec));
             break;
         case 1:
             if constexpr (arg_count < 2)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<1>(t), argspec);
+                vfmt(std::get<1>(t), std::move(argspec));
             break;
         case 2:
             if constexpr (arg_count < 3)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<2>(t), argspec);
+                vfmt(std::get<2>(t), std::move(argspec));
             break;
         case 3:
             if constexpr (arg_count < 4)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<3>(t), argspec);
+                vfmt(std::get<3>(t), std::move(argspec));
             break;
         case 4:
             if constexpr (arg_count < 5)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<4>(t), argspec);
+                vfmt(std::get<4>(t), std::move(argspec));
             break;
         case 5:
             if constexpr (arg_count < 6)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<5>(t), argspec);
+                vfmt(std::get<5>(t), std::move(argspec));
             break;
         case 6:
             if constexpr (arg_count < 7)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<6>(t), argspec);
+                vfmt(std::get<6>(t), std::move(argspec));
             break;
         case 7:
             if constexpr (arg_count < 8)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<7>(t), argspec);
+                vfmt(std::get<7>(t), std::move(argspec));
             break;
         case 8:
             if constexpr (arg_count < 9)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<8>(t), argspec);
+                vfmt(std::get<8>(t), std::move(argspec));
             break;
         case 9:
             if constexpr (arg_count < 10)
                 return std::errc::invalid_argument;
             else
-                vfmt(std::get<9>(t), argspec);
+                vfmt(std::get<9>(t), std::move(argspec));
             break;
 
         default:
