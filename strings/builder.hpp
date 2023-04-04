@@ -15,33 +15,40 @@
 
 namespace strings {
 
-inline auto string_view_to_chars(char* first, char* last, std::string_view s) -> std::to_chars_result
-{
-    if (first + s.size() > last)
-        return {last, std::errc::value_too_large};
-    for (auto c : s)
-        *first++ = c;
-    return {first, std::errc{}};
-};
-
-namespace writer {
-
-template <typename T, typename... Args> struct traits;
+// customization for user types
+template <typename T> struct string_marshaler;
+template <typename T> struct chars_marshaler;
+template <typename T> struct formatter;
 
 template <typename T, typename... Args>
-concept writable = requires(
-    char* buf, T const& v, Args&&... args) { traits<T, Args...>{}(buf, buf, v, static_cast<Args&&>(args)...); };
+concept string_marshalable = requires(T const& v, Args&&... args) {
+    { string_marshaler<T>{}(v, static_cast<Args&&>(args)...) } -> std::convertible_to<std::string_view>;
+};
+
+template <typename T, typename... Args>
+concept chars_marshalable = requires(char* buf, T const& v, Args&&... args) {
+    { chars_marshaler<T>{}(buf, buf, v, static_cast<Args&&>(args)...) } -> std::same_as<std::to_chars_result>;
+};
+
+template <typename T, typename... Args>
+concept to_char_convertible = requires(char* buf, T const& v, Args&&... args) {
+    { std::to_chars(buf, buf, v, static_cast<Args&&>(args)...) } -> std::same_as<std::to_chars_result>;
+};
+
+template <typename T, typename... Args>
+concept marshalable = 
+    string_marshalable<T, Args...> || 
+    chars_marshalable<T, Args...>;
 
 template <typename T>
-concept supported_type = std::integral<std::remove_cvref_t<T>> || std::floating_point<std::remove_cvref_t<T>> ||
-                         writable<std::remove_cvref_t<T>>;
-} // namespace writer
+concept formattable =
+    requires(char* buf, T const& v, fmtarg const& fmt) { formatter<T>{}(buf, buf, v, fmt); };
 
-// writer_base writes stuff between [first and last)
-struct writer_base {
-    constexpr writer_base() noexcept = default;
+// writer writes stuff between [first and last)
+struct writer {
+    constexpr writer() noexcept = default;
 
-    constexpr writer_base(char* first, char* last) noexcept
+    constexpr writer(char* first, char* last) noexcept
         : first_{first}
         , cursor_{first}
         , last_{last}
@@ -53,62 +60,26 @@ struct writer_base {
     constexpr auto size() const noexcept { return size_t(cursor_ - first_); }
     constexpr auto remaining() const noexcept { return size_t(last_ - cursor_); }
 
-    constexpr auto clear() noexcept -> writer_base&
-    {
-        cursor_ = first_;
-        return *this;
-    }
-
     constexpr operator const std::string_view() const noexcept { return {first_, size()}; }
     constexpr auto string_view() const -> std::string_view { return {first_, size()}; }
     auto string() const -> std::string { return std::string{first_, size()}; }
 
-    constexpr auto write(std::string_view const& sv) -> std::errc
-    {
-        if (sv.empty())
-            return std::errc{};
-        else if (cursor_ + sv.size() <= last_) {
-            for (auto cp : sv)
-                *cursor_++ = cp;
-            return std::errc{};
-        }
-        else {
-            for (auto cp : sv.substr(0, last_ - cursor_))
-                *cursor_++ = cp;
-            return std::errc::value_too_large;
-        }
-    }
+    constexpr auto clear() -> writer&;
 
-    constexpr auto write_codeunit(char codeunit) -> std::errc
-    {
-        if (cursor_ == last_)
-            return std::errc::value_too_large;
-        *cursor_++ = codeunit;
-        return std::errc{};
-    }
+    constexpr auto write_codeunit(char codeunit) -> std::errc;
+    constexpr auto write(std::string_view const& sv) -> std::errc;
 
     template <typename T>
-    requires(!std::same_as<T, std::string_view> && std::convertible_to<T, std::string_view> && !writer::writable<T>)
-    constexpr auto write(T const& s)
-    {
-        return write(std::string_view(s));
-    }
+    requires(!std::same_as<T, std::string_view> && std::convertible_to<T, std::string_view> && !marshalable<T>)
+    constexpr auto write(T const& s) -> std::errc;
 
     template <typename T, typename... Args>
-    requires writer::writable<T, Args...>
-    auto write(T const& value, Args&&... args)
-    {
-        using traits = writer::traits<T, Args...>;
-        return check(traits{}(cursor_, last_, value, static_cast<Args&&>(args)...));
-    }
-
+    requires (to_char_convertible<T, Args...> && !marshalable<T>)
+    constexpr auto write(T const& v, Args&&... args) -> std::errc;
+        
     template <typename T, typename... Args>
-    requires(!writer::writable<T, Args...> && !std::convertible_to<T, std::string_view>)
-    auto write(T const& value, Args&&... args)
-    {
-        using namespace std;
-        return check(to_chars(cursor_, last_, value, static_cast<Args&&>(args)...));
-    }
+    requires marshalable<T, Args...>
+    constexpr auto write(T const& value, Args&&... args) -> std::errc;
 
     template <typename... Ts> constexpr auto format(std::string_view spec, Ts&&... values) -> std::errc;
 
@@ -135,15 +106,15 @@ private:
     }
 };
 
-// zwriter extends writer_base with automatic zero termination.
+// zwriter extends writer with automatic zero termination.
 //
 // Use with functions that require zero terminated strings.
 //
-struct zwriter : public writer_base {
+struct zwriter : public writer {
     constexpr zwriter() noexcept {}
 
     constexpr zwriter(char* first, char* last) noexcept
-        : writer_base{first, last - 1}
+        : writer{first, last - 1}
     {
     }
 
@@ -184,7 +155,93 @@ private:
     storage_type buf_;
 };
 
-constexpr void writer_base::mk_printf_spec(
+constexpr auto writer::clear() -> writer&
+{
+    cursor_ = first_;
+    return *this;
+}
+
+constexpr auto writer::write_codeunit(char codeunit) -> std::errc
+{
+    if (cursor_ == last_)
+        return std::errc::value_too_large;
+    *cursor_++ = codeunit;
+    return std::errc{};
+}
+
+constexpr auto writer::write(std::string_view const& sv) -> std::errc
+{
+    if (sv.empty())
+        return std::errc{};
+    else if (cursor_ + sv.size() <= last_) {
+        for (auto cp : sv)
+            *cursor_++ = cp;
+        return std::errc{};
+    }
+    else {
+        for (auto cp : sv.substr(0, last_ - cursor_))
+            *cursor_++ = cp;
+        return std::errc::value_too_large;
+    }
+}
+
+template <typename T>
+requires(!std::same_as<T, std::string_view> && std::convertible_to<T, std::string_view> && !marshalable<T>)
+constexpr auto writer::write(T const& s) -> std::errc
+{
+    return write(std::string_view(s));
+}
+
+template <typename T, typename... Args>
+requires (to_char_convertible<T, Args...> && !marshalable<T>)
+constexpr auto writer::write(T const& v, Args&&... args) -> std::errc {
+    constexpr auto nargs = sizeof...(Args);
+
+    if constexpr (std::floating_point<T> && (nargs == 0)) {
+        auto const spec = sizeof(T) >= 8 ? "%.16g" : "%.7g";
+        auto const n = std::snprintf(cursor_, last_ - cursor_, spec, v);
+        
+        if (n <= 0) 
+            return std::errc::value_too_large;
+
+        if (fp_decimal != '.') 
+            for (auto i = 0; i < n; ++i) 
+                if (cursor_[i] == '.') {
+                    cursor_[i] = fp_decimal;
+                    break;
+                }
+            
+        cursor_ += n;
+        return std::errc{};
+    } else {
+        // integral, and other types that support std::to_chars
+        return check(std::to_chars(cursor_, last_, v, static_cast<Args&&>(args)...));
+    }
+}
+
+
+template <typename T, typename... Args>
+requires marshalable<T, Args...>
+constexpr auto writer::write(T const& value, Args&&... args) -> std::errc
+{
+    if constexpr (chars_marshalable<T, Args...>) {
+        auto m = chars_marshaler<T>{};
+        return check(m(cursor_, last_, value, std::forward<Args...>(args)...));
+    }
+    else if constexpr (string_marshalable<T, Args...>) {
+        auto m = string_marshaler<T>{};
+        return write(m(value, std::forward<Args...>(args)...));
+    }
+    else if constexpr(to_char_convertible<T, Args...>) {
+        return check(std::to_chars(cursor_, last_, value, static_cast<Args&&>(args)...));
+    }
+    else
+        return std::errc::not_supported;
+}
+
+
+
+constexpr void writer::mk_printf_spec(
     fmtarg const& fmt, char const* size_spec, char t, char* buf, int override_precision)
 {
     *buf++ = '%';
@@ -219,9 +276,16 @@ constexpr void writer_base::mk_printf_spec(
     *buf++ = 0;
 }
 
-template <typename T> constexpr auto writer_base::vfmt(T const& v, fmtarg const& fmt) -> std::errc
+template <typename T> constexpr auto writer::vfmt(T const& v, fmtarg const& fmt) -> std::errc
 {
-    if constexpr (std::convertible_to<T, std::string_view>) {
+    if constexpr(formattable<T>) {
+        auto f = formatter<T>{};
+        return f(v, fmt);
+    } 
+    else if constexpr(marshalable<T>) {
+        return write(v);
+    }
+    else if constexpr (std::convertible_to<T, std::string_view>) {
         if (fmt.type != ' ' && fmt.type != 's')
             return std::errc::invalid_argument;
         else
@@ -285,7 +349,7 @@ template <typename T> constexpr auto writer_base::vfmt(T const& v, fmtarg const&
     return std::errc::not_supported;
 }
 
-template <typename... Ts> constexpr auto writer_base::format(std::string_view spec, Ts&&... args) -> std::errc
+template <typename... Ts> constexpr auto writer::format(std::string_view spec, Ts&&... args) -> std::errc
 {
     auto arg_index = std::size_t{0};
     constexpr auto arg_count = sizeof...(args);
