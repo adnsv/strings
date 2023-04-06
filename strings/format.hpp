@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <cassert>
 
 namespace strings {
 
@@ -22,7 +23,7 @@ auto format_ex(char fp_decimal, std::string_view spec, Ts&&... args) -> std::str
     constexpr std::size_t buffer_size = 256;
 
     auto vfmt = [&ret, fp_decimal](auto const& v, fmt::arg const& arg_fmt) {
-        using vtype = std::remove_cv_t<decltype(v)>;
+        using vtype = std::remove_cvref_t<decltype(v)>;
 
         if constexpr (formattable<vtype>) {
             char buf[buffer_size];
