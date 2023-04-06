@@ -52,7 +52,7 @@ struct writer {
     constexpr auto clear() -> writer&;
 
     constexpr auto write_codeunit(char codeunit) -> std::errc;
-    constexpr auto write(std::string_view const& sv) -> std::errc;
+    constexpr auto write(std::string_view sv) -> std::errc;
 
     template <typename T>
     requires(!std::same_as<T, std::string_view> && std::convertible_to<T, std::string_view> && !marshalable<T>)
@@ -179,7 +179,7 @@ constexpr auto writer::write_codeunit(char codeunit) -> std::errc
     return std::errc{};
 }
 
-constexpr auto writer::write(std::string_view const& sv) -> std::errc
+constexpr auto writer::write(std::string_view sv) -> std::errc
 {
     if (sv.empty())
         return std::errc{};

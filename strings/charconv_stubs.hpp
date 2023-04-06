@@ -9,7 +9,6 @@
 
 #if defined(STRINGS_USE_TOCHARS_FLOAT_STUB)
 #include <cstdio>
-#pragma message("using to_chars stub")
 #endif
 
 namespace std {
