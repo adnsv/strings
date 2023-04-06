@@ -18,8 +18,9 @@ namespace std {
 template <std::floating_point T>
 inline to_chars_result to_chars(char* first, char* last, T const& value)
 {
-    auto n = std::snprintf(first, last - first, "%g", value);
-    if (n <= 0)
+    auto const nmax = last - first;
+    auto n = std::snprintf(first, nmax, "%g", value);
+    if (n <= 0 || n >= nmax)
         return {last, std::errc::value_too_large};
     else
         return {first + n, std::errc{}};
@@ -40,8 +41,9 @@ inline to_chars_result to_chars(char* first, char* last, T const& value, std::ch
         break;
     default:;
     }
-    auto n = std::snprintf(first, last - first, spec, value);
-    if (n <= 0)
+    auto const nmax = last - first;
+    auto n = std::snprintf(first, nmax, spec, value);
+    if (n <= 0 || n >= nmax)
         return {last, std::errc::value_too_large};
     else
         return {first + n, std::errc{}};
@@ -63,8 +65,9 @@ inline to_chars_result to_chars(char* first, char* last, T const& value, std::ch
         break;
     default:;
     }
-    auto n = std::snprintf(first, last - first, spec, precision, value);
-    if (n <= 0)
+    auto const nmax = last - first;
+    auto n = std::snprintf(first, nmax, spec, precision, value);
+    if (n <= 0 || n >= nmax)
         return {last, std::errc::value_too_large};
     else
         return {first + n, std::errc{}};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ascii.hpp"
+#include "format_locale.hpp"
 #include <algorithm>
 #include <charconv>
 #include <clocale>
@@ -41,19 +42,6 @@ concept modifier =
 
 } // namespace appearance
 
-inline auto get_user_decimal() -> char
-{
-    auto ret = char('.');
-    auto prev = std::setlocale(LC_NUMERIC, "");
-    auto ld = std::localeconv();
-    if (ld && ld->decimal_point && ld->decimal_point[0] == ',')
-        ret = ',';
-    std::setlocale(LC_NUMERIC, prev);
-    return ret;
-}
-
-inline char const user_decimal = get_user_decimal();
-
 struct locale : public appearance::separators,
                 public appearance::sign,
                 public appearance::specials,
@@ -61,7 +49,26 @@ struct locale : public appearance::separators,
 
     constexpr locale() noexcept = default;
 
-    static constexpr auto ascii(char decimal = '.')
+    static auto ascii()
+    {
+        auto ret = locale{};
+        ret.decimal = user_decimal;
+        return ret;
+    }
+    static auto unicode()
+    {
+        auto ret = locale{};
+        ret.decimal = user_decimal;
+        ret.plus = "";      // no prefix for positive numbers
+        ret.minus = "−";    // U+2212 - use unicode mathematical minus instead of ascii dash
+        ret.infinity = "∞"; // U+221E
+        ret.notanumber = "NaN";
+        ret.exp_prefix = " × 10"; // use " × 10" as exponent prefix
+        ret.exp_super = true;     // use superscript for exponent digits
+        return ret;
+    }
+
+    static constexpr auto ascii(char decimal)
     {
         auto ret = locale{};
         ret.decimal = decimal;
@@ -101,9 +108,7 @@ struct settings {
 
 namespace detail {
 
-static constexpr auto npos = std::string_view::npos;
-
-inline auto to_chars(char* first, char* last, std::string_view s) -> std::to_chars_result
+constexpr auto to_chars(char* first, char* last, std::string_view s) -> std::to_chars_result
 {
     if (first + s.size() > last)
         return {last, std::errc::value_too_large};
@@ -120,7 +125,7 @@ constexpr auto digit_val(char c) -> int
 
 constexpr auto is_digit(char c) { return unsigned(c) - unsigned('0') < 10u; }
 
-inline auto find_trim_pos(char const* first, char const* last) -> char const*
+constexpr auto find_trim_pos(char const* first, char const* last) -> char const*
 {
     if (first == last || last[-1] != '0')
         return last;
@@ -143,7 +148,7 @@ inline auto find_trim_pos(char const* first, char const* last) -> char const*
     return (first == z) ? z : last;
 }
 
-inline auto sci_exp_value(char const* first, char const* last) -> std::optional<int>
+constexpr auto sci_exp_value(char const* first, char const* last) -> std::optional<int>
 {
     auto const n = last - first;
     if (n < 2 || first[0] != 'e' || !is_digit(last[-1]))
@@ -166,7 +171,7 @@ inline auto sci_exp_value(char const* first, char const* last) -> std::optional<
     return v * sign;
 }
 
-inline auto exp_to_chars(char* first, char* last, std::string_view prefix, int exp, std::string_view plus,
+constexpr auto exp_to_chars(char* first, char* last, std::string_view prefix, int exp, std::string_view plus,
     std::string_view minus, bool use_superscript) -> std::to_chars_result
 {
     // count ascii symbols required (assuming exp is less than 100)
@@ -181,7 +186,7 @@ inline auto exp_to_chars(char* first, char* last, std::string_view prefix, int e
 
     auto n = prefix.size() + sign.size();
 
-    static constexpr std::string_view ss[10] = {"⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"};
+    constexpr std::string_view ss[10] = {"⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"};
 
     if (!use_superscript)
         n += d1 ? 2 : 1;

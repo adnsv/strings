@@ -1,7 +1,8 @@
 #pragma once
 
-#include "fmtspec.hpp"
-#include "fp.hpp"
+#include "format_locale.hpp"
+#include "format_spec.hpp"
+#include "marshal_traits.hpp"
 #include <array>
 #include <charconv>
 #include <concepts>
@@ -11,47 +12,31 @@
 #include <system_error>
 #include <vector>
 
-#include "charconv_stubs.hpp"
-
 namespace strings {
-
-// customization for user types
-template <typename T> struct string_marshaler;
-template <typename T> struct chars_marshaler;
-template <typename T> struct formatter;
-
-template <typename T, typename... Args>
-concept string_marshalable = requires(T const& v, Args&&... args) {
-    { string_marshaler<T>{}(v, static_cast<Args&&>(args)...) } -> std::convertible_to<std::string_view>;
-};
-
-template <typename T, typename... Args>
-concept chars_marshalable = requires(char* buf, T const& v, Args&&... args) {
-    { chars_marshaler<T>{}(buf, buf, v, static_cast<Args&&>(args)...) } -> std::same_as<std::to_chars_result>;
-};
-
-template <typename T, typename... Args>
-concept to_char_convertible = requires(char* buf, T const& v, Args&&... args) {
-    { std::to_chars(buf, buf, v, static_cast<Args&&>(args)...) } -> std::same_as<std::to_chars_result>;
-};
-
-template <typename T, typename... Args>
-concept marshalable = 
-    string_marshalable<T, Args...> || 
-    chars_marshalable<T, Args...>;
-
-template <typename T>
-concept formattable =
-    requires(char* buf, T const& v, fmtarg const& fmt) { formatter<T>{}(buf, buf, v, fmt); };
 
 // writer writes stuff between [first and last)
 struct writer {
-    constexpr writer() noexcept = default;
-
-    constexpr writer(char* first, char* last) noexcept
+    writer() noexcept
+        : fp_decimal_{user_decimal}
+    {
+    }
+    writer(char* first, char* last) noexcept
         : first_{first}
         , cursor_{first}
         , last_{last}
+        , fp_decimal_{user_decimal}
+    {
+    }
+
+    constexpr writer(char fp_decimal) noexcept
+        : fp_decimal_{fp_decimal}
+    {
+    }
+    constexpr writer(char* first, char* last, char fp_decimal) noexcept
+        : first_{first}
+        , cursor_{first}
+        , last_{last}
+        , fp_decimal_{fp_decimal}
     {
     }
 
@@ -74,26 +59,23 @@ struct writer {
     constexpr auto write(T const& s) -> std::errc;
 
     template <typename T, typename... Args>
-    requires (to_char_convertible<T, Args...> && !marshalable<T>)
+    requires(to_char_convertible<T, Args...> && !marshalable<T>)
     constexpr auto write(T const& v, Args&&... args) -> std::errc;
-        
+
     template <typename T, typename... Args>
     requires marshalable<T, Args...>
     constexpr auto write(T const& value, Args&&... args) -> std::errc;
 
-    template <typename... Ts> constexpr auto format(std::string_view spec, Ts&&... values) -> std::errc;
+    template <detail::supported_format_arg... Ts>
+    constexpr auto format(std::string_view spec, Ts&&... values) -> std::errc;
 
 protected:
     char* cursor_ = nullptr;
     char* first_ = nullptr;
     char* last_ = nullptr;
+    char fp_decimal_ = '.';
 
-    char fp_decimal = '.';
-
-    constexpr void mk_printf_spec(
-        fmtarg const& fmt, char const* sizespec, char t, char* buf, int override_precision = -1);
-
-    template <typename T> constexpr auto vfmt(T const& v, fmtarg const& fmt) -> std::errc;
+    template <detail::supported_format_arg T> constexpr auto vfmt(T const& v, fmt::arg const&) -> std::errc;
 
 private:
     constexpr auto check(std::to_chars_result const& cr) -> std::errc
@@ -111,9 +93,20 @@ private:
 // Use with functions that require zero terminated strings.
 //
 struct zwriter : public writer {
-    constexpr zwriter() noexcept {}
+    constexpr zwriter(char fp_decimal) noexcept
+        : writer(fp_decimal)
+    {
+    }
+    constexpr zwriter(char* first, char* last, char fp_decimal) noexcept
+        : writer{first, last - 1, fp_decimal}
+    {
+    }
 
-    constexpr zwriter(char* first, char* last) noexcept
+    zwriter() noexcept
+        : writer()
+    {
+    }
+    zwriter(char* first, char* last) noexcept
         : writer{first, last - 1}
     {
     }
@@ -136,15 +129,32 @@ template <std::size_t StorageCapacity = RuntimeCapacity> struct builder : public
             std::vector<char>,      // heap-allocated storage
             char[StorageCapacity]>; // stack-allocated storage
 
-    constexpr builder()
+    builder()
     requires(StorageCapacity != RuntimeCapacity)
         : zwriter{buf_, buf_ + StorageCapacity}
     {
     }
 
-    constexpr builder(std::size_t capacity)
+    builder(std::size_t capacity)
     requires(StorageCapacity == RuntimeCapacity)
-        : buf_(capacity + 1)
+        : zwriter{}
+        , buf_(capacity + 1)
+    {
+        first_ = buf_.data();
+        last_ = first_ + capacity;
+        cursor_ = first_;
+    }
+
+    constexpr builder(char fp_decimal)
+    requires(StorageCapacity != RuntimeCapacity)
+        : zwriter{buf_, buf_ + StorageCapacity, fp_decimal}
+    {
+    }
+
+    constexpr builder(std::size_t capacity, char fp_decimal)
+    requires(StorageCapacity == RuntimeCapacity)
+        : zwriter{fp_decimal}
+        , buf_(capacity + 1)
     {
         first_ = buf_.data();
         last_ = first_ + capacity;
@@ -193,32 +203,33 @@ constexpr auto writer::write(T const& s) -> std::errc
 }
 
 template <typename T, typename... Args>
-requires (to_char_convertible<T, Args...> && !marshalable<T>)
-constexpr auto writer::write(T const& v, Args&&... args) -> std::errc {
+requires(to_char_convertible<T, Args...> && !marshalable<T>)
+constexpr auto writer::write(T const& v, Args&&... args) -> std::errc
+{
     constexpr auto nargs = sizeof...(Args);
 
     if constexpr (std::floating_point<T> && (nargs == 0)) {
         auto const spec = sizeof(T) >= 8 ? "%.16g" : "%.7g";
         auto const n = std::snprintf(cursor_, last_ - cursor_, spec, v);
-        
-        if (n <= 0) 
+
+        if (n <= 0)
             return std::errc::value_too_large;
 
-        if (fp_decimal != '.') 
-            for (auto i = 0; i < n; ++i) 
+        if (fp_decimal_ != '.')
+            for (auto i = 0; i < n; ++i)
                 if (cursor_[i] == '.') {
-                    cursor_[i] = fp_decimal;
+                    cursor_[i] = fp_decimal_;
                     break;
                 }
-            
+
         cursor_ += n;
         return std::errc{};
-    } else {
+    }
+    else {
         // integral, and other types that support std::to_chars
         return check(std::to_chars(cursor_, last_, v, static_cast<Args&&>(args)...));
     }
 }
-
 
 template <typename T, typename... Args>
 requires marshalable<T, Args...>
@@ -232,86 +243,35 @@ constexpr auto writer::write(T const& value, Args&&... args) -> std::errc
         auto m = string_marshaler<T>{};
         return write(m(value, std::forward<Args...>(args)...));
     }
-    else if constexpr(to_char_convertible<T, Args...>) {
-        return check(std::to_chars(cursor_, last_, value, static_cast<Args&&>(args)...));
-    }
     else
         return std::errc::not_supported;
 }
 
-
-
-constexpr void writer::mk_printf_spec(
-    fmtarg const& fmt, char const* size_spec, char t, char* buf, int override_precision)
+template <detail::supported_format_arg T> constexpr auto writer::vfmt(T const& v, fmt::arg const& a) -> std::errc
 {
-    *buf++ = '%';
-    if (fmt.sign != '-')
-        *buf++ = fmt.sign;
-    if (fmt.alternate_form)
-        *buf++ = '#';
-    if (fmt.zero_padding)
-        *buf++ = '0';
-
-    auto const w = fmt.width;
-    auto const p = override_precision >= 0 ? override_precision : fmt.precision;
-
-    if (w > 0 && w < 100) {
-        if (w >= 10)
-            *buf++ = '0' + w / 10;
-        *buf++ = '0' + w % 10;
-    }
-
-    if (p >= 0 && p < 100) {
-        *buf++ = '.';
-        if (p >= 10)
-            *buf++ = '0' + p / 10;
-        *buf++ = '0' + p % 10;
-    }
-
-    if (size_spec)
-        while (*size_spec)
-            *buf++ = *size_spec++;
-
-    *buf++ = t;
-    *buf++ = 0;
-}
-
-template <typename T> constexpr auto writer::vfmt(T const& v, fmtarg const& fmt) -> std::errc
-{
-    if constexpr(formattable<T>) {
+    if constexpr (formattable<T>) {
         auto f = formatter<T>{};
-        return f(v, fmt);
-    } 
-    else if constexpr(marshalable<T>) {
+        auto [ptr, ec] = f(cursor_, last_, v, a);
+        if (ec != std::errc{})
+            return ec;
+        cursor_ = ptr;
+    }
+    else if constexpr (marshalable<T>) {
         return write(v);
     }
     else if constexpr (std::convertible_to<T, std::string_view>) {
-        if (fmt.type != ' ' && fmt.type != 's')
+        if (a.type != ' ' && a.type != 's')
             return std::errc::invalid_argument;
         else
             return write(v);
     }
     else if constexpr (std::integral<T>) {
-        char pfspec[32];
-        if constexpr (std::signed_integral<T>) {
-            char const* sizespec = sizeof(T) == sizeof(long long)     ? "ll"
-                                   : sizeof(T) == sizeof(long)        ? "l"
-                                   : sizeof(T) == sizeof(short)       ? "h"
-                                   : sizeof(T) == sizeof(signed char) ? "hh"
-                                                                      : nullptr;
-            mk_printf_spec(fmt, nullptr, 'd', pfspec);
-        }
-        else {
-            char const* sizespec = sizeof(T) == sizeof(unsigned long long) ? "ll"
-                                   : sizeof(T) == sizeof(unsigned long)    ? "l"
-                                   : sizeof(T) == sizeof(unsigned short)   ? "h"
-                                   : sizeof(T) == sizeof(unsigned char)    ? "hh"
-                                                                           : nullptr;
-            mk_printf_spec(fmt, sizespec, 'u', pfspec);
-        }
-
-        auto n = std::snprintf(cursor_, last_ - cursor_, pfspec, v);
-        if (n <= 0)
+        char pfspec[16];
+        if (!fmt::convert_printf_spec<T>(a, pfspec))
+            return std::errc::invalid_argument;
+        auto const nmax = last_ - cursor_;
+        auto n = std::snprintf(cursor_, nmax, pfspec, v);
+        if (n <= 0 || n >= nmax)
             return std::errc::value_too_large;
         cursor_ += n;
         return std::errc{};
@@ -321,25 +281,18 @@ template <typename T> constexpr auto writer::vfmt(T const& v, fmtarg const& fmt)
             write_codeunit('0');
             return std::errc{};
         }
-
-        auto const auto_precision = fmt.type == ' ';
-        auto const precision = auto_precision ? std::numeric_limits<T>::max_digits10 - 1 : fmt.precision;
-        auto const t = fmt.type == ' ' ? 'g' : fmt.type;
-        if (std::string_view{"eEfFgGaA"}.find(t) == std::string_view::npos)
-            return std::errc::not_supported;
-
-        char const* sizespec = sizeof(T) == sizeof(long double) ? "L" : nullptr;
-
-        char pfspec[32];
-        mk_printf_spec(fmt, sizespec, t, pfspec, precision);
-        auto n = std::snprintf(cursor_, last_ - cursor_, pfspec, v);
-        if (n <= 0)
+        char pfspec[16];
+        if (!fmt::convert_printf_spec<T>(a, pfspec))
+            return std::errc::invalid_argument;
+        auto const nmax = last_ - cursor_;
+        auto n = std::snprintf(cursor_, nmax, pfspec, v);
+        if (n <= 0 || n >= nmax)
             return std::errc::value_too_large;
 
-        if (fp_decimal != '.')
+        if (fp_decimal_ != '.')
             for (auto i = 0; i < n; ++i)
                 if (cursor_[i] == '.') {
-                    cursor_[i] = fp_decimal;
+                    cursor_[i] = fp_decimal_;
                     break;
                 }
 
@@ -349,133 +302,93 @@ template <typename T> constexpr auto writer::vfmt(T const& v, fmtarg const& fmt)
     return std::errc::not_supported;
 }
 
-template <typename... Ts> constexpr auto writer::format(std::string_view spec, Ts&&... args) -> std::errc
+template <detail::supported_format_arg... Ts>
+constexpr auto writer::format(std::string_view spec, Ts&&... args) -> std::errc
 {
-    auto arg_index = std::size_t{0};
+    auto curr_index = 0;
     constexpr auto arg_count = sizeof...(args);
-
     auto t = std::forward_as_tuple(args...);
 
-    while (!spec.empty()) {
-        auto p = std::size_t{0};
-        auto const n = spec.size();
-        while (p < n)
-            if (spec[p] == '{' || spec[p] == '}')
+    return fmt::parse_spec(
+        spec.data(), spec.data() + spec.size(), //
+        [&](char const* first, char const* last) {
+            // handle string segment between arguments
+            return write(std::string_view{first, std::size_t(last - first)});
+        },
+        [&](int arg_index, bool arg_dflt, fmt::arg const& arg_fmt) {
+            // handle argument
+            if (arg_index >= 0)
+                curr_index = arg_index;
+
+            switch (curr_index) {
+            case 0:
+                if constexpr (arg_count < 1)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<0>(t), arg_fmt);
                 break;
-            else
-                ++p;
+            case 1:
+                if constexpr (arg_count < 2)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<1>(t), arg_fmt);
+                break;
+            case 2:
+                if constexpr (arg_count < 3)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<2>(t), arg_fmt);
+                break;
+            case 3:
+                if constexpr (arg_count < 4)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<3>(t), arg_fmt);
+                break;
+            case 4:
+                if constexpr (arg_count < 5)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<4>(t), arg_fmt);
+                break;
+            case 5:
+                if constexpr (arg_count < 6)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<5>(t), arg_fmt);
+                break;
+            case 6:
+                if constexpr (arg_count < 7)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<6>(t), arg_fmt);
+                break;
+            case 7:
+                if constexpr (arg_count < 8)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<7>(t), arg_fmt);
+                break;
+            case 8:
+                if constexpr (arg_count < 9)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<8>(t), arg_fmt);
+                break;
+            case 9:
+                if constexpr (arg_count < 10)
+                    return std::errc::invalid_argument;
+                else
+                    vfmt(std::get<9>(t), arg_fmt);
+                break;
 
-        if (p) {
-            if (auto ec = write(spec.substr(0, p)); ec != std::errc{})
-                return ec;
-            spec.remove_prefix(p);
-            if (spec.empty())
-                return std::errc{};
-        }
+            default:
+                return std::errc::invalid_argument;
+            }
+            ++curr_index;
 
-        if (spec.size() < 2)
-            return std::errc::invalid_argument;
-
-        if (spec[0] == '}') {
-            if (spec[1] != '}')
-                return std::errc::invalid_argument;
-            if (auto ec = write_codeunit('}'); ec != std::errc{})
-                return ec;
-            spec.remove_prefix(2);
-            continue;
-        }
-
-        if (spec[1] == '{') {
-            if (auto ec = write_codeunit('{'); ec != std::errc{})
-                return ec;
-            spec.remove_prefix(2);
-            continue;
-        }
-
-        spec.remove_prefix(1);
-        auto argspec = fmtarg{};
-
-        // have an opening curly brace
-        if (spec[0] == '}') {
-            // default formatting
-            spec.remove_prefix(1);
-        }
-        else {
-            // fmtlib-like spec
-            auto [pos, ec] = parse_fmt_arg(spec.data(), spec.data() + spec.size(), arg_index, argspec);
-            if (ec != std::errc{})
-                return ec;
-            spec.remove_prefix(pos - spec.data());
-        }
-
-        switch (arg_index) {
-        case 0:
-            if constexpr (arg_count < 1)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<0>(t), argspec);
-            break;
-        case 1:
-            if constexpr (arg_count < 2)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<1>(t), argspec);
-            break;
-        case 2:
-            if constexpr (arg_count < 3)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<2>(t), argspec);
-            break;
-        case 3:
-            if constexpr (arg_count < 4)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<3>(t), argspec);
-            break;
-        case 4:
-            if constexpr (arg_count < 5)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<4>(t), argspec);
-            break;
-        case 5:
-            if constexpr (arg_count < 6)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<5>(t), argspec);
-            break;
-        case 6:
-            if constexpr (arg_count < 7)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<6>(t), argspec);
-            break;
-        case 7:
-            if constexpr (arg_count < 8)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<7>(t), argspec);
-            break;
-        case 8:
-            if constexpr (arg_count < 9)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<8>(t), argspec);
-            break;
-        case 9:
-            if constexpr (arg_count < 10)
-                return std::errc::invalid_argument;
-            else
-                vfmt(std::get<9>(t), argspec);
-            break;
-
-        default:
-            return std::errc::invalid_argument;
-        }
-        ++arg_index;
-    }
-    return std::errc{};
+            return std::errc{};
+        });
 }
 
 } // namespace strings
