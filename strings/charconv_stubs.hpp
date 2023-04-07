@@ -4,7 +4,9 @@
 #include <concepts>
 
 #ifndef __cpp_lib_to_chars
+#ifndef STRINGS_USE_TOCHARS_FLOAT_STUB
 #define STRINGS_USE_TOCHARS_FLOAT_STUB
+#endif
 #endif
 
 #if defined(STRINGS_USE_TOCHARS_FLOAT_STUB)
