@@ -73,7 +73,7 @@ auto format_ex(char fp_decimal, std::string_view spec, Ts&&... args) -> std::str
             ret.append(buf, buf + n);
             return std::errc{};
         }
-        else if constexpr (to_char_convertible<vtype>) {
+        else if constexpr (to_chars_convertible<vtype>) {
             // custom types that declare std::to_chars
             char buf[buffer_size];
             auto r = std::to_chars(buf, buf + buffer_size, v);

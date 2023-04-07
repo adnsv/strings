@@ -60,7 +60,7 @@ struct writer {
     constexpr auto write(T const& s) -> std::errc;
 
     template <typename T, typename... Args>
-    requires(to_char_convertible<T, Args...> && !marshalable<T>)
+    requires(to_chars_convertible<T, Args...> && !marshalable<T>)
     constexpr auto write(T const& v, Args&&... args) -> std::errc;
 
     template <typename T, typename... Args>
@@ -204,7 +204,7 @@ constexpr auto writer::write(T const& s) -> std::errc
 }
 
 template <typename T, typename... Args>
-requires(to_char_convertible<T, Args...> && !marshalable<T>)
+requires(to_chars_convertible<T, Args...> && !marshalable<T>)
 constexpr auto writer::write(T const& v, Args&&... args) -> std::errc
 {
     constexpr auto nargs = sizeof...(Args);
