@@ -3,6 +3,7 @@
 #include "format_locale.hpp"
 #include "format_spec.hpp"
 #include "marshal_traits.hpp"
+#include "charconv_stubs.hpp"
 #include <array>
 #include <charconv>
 #include <concepts>
