@@ -75,7 +75,7 @@ struct locale : public appearance::separators,
         return ret;
     }
 
-    static constexpr auto unicode(char decimal = '.')
+    static constexpr auto unicode(char decimal)
     {
         auto ret = locale{};
         ret.decimal = decimal;
