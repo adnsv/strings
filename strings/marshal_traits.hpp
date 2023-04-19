@@ -9,9 +9,9 @@
 namespace strings {
 
 // customization for user types
-template <typename T> struct string_marshaler;
-template <typename T> struct chars_marshaler;
-template <typename T> struct formatter;
+template <typename T, typename... Args> struct string_marshaler;
+template <typename T, typename... Args> struct chars_marshaler;
+template <typename T, typename... Args> struct formatter;
 
 template <typename T, typename... Args>
 concept string_marshalable = requires(T const& v, Args&&... args) {
