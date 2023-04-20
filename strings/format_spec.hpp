@@ -200,7 +200,7 @@ template <typename T> constexpr auto convert_printf_spec(fmt::arg const& a, char
             // auto precision
             t = 'g';
             if (precision < 0)
-                precision = std::numeric_limits<T>::max_digits10 - 2;
+                precision = std::numeric_limits<T>::max_digits10 - 3;
         }
     }
 
