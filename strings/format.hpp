@@ -49,7 +49,7 @@ auto format_ex(char fp_decimal, std::string_view spec, Ts&&... args) -> std::str
             else
                 return r.ec;
         }
-        else if constexpr (std::convertible_to<vtype, std::string_view>) {
+        else if constexpr (convertible_to_<vtype, std::string_view>) {
             ret += v;
             return std::errc{};
         }
@@ -61,7 +61,7 @@ auto format_ex(char fp_decimal, std::string_view spec, Ts&&... args) -> std::str
             auto n = std::snprintf(buf, 128, pfspec, v);
             assert(n > 0 && n < 128);
 
-            if constexpr (std::floating_point<vtype>) {
+            if constexpr (std::is_floating_point_v<vtype>) {
                 if (fp_decimal != '.')
                     for (auto i = 0; i < n; ++i)
                         if (buf[i] == '.') {
