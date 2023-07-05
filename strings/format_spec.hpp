@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <string_view>
+#include <type_traits>
 
 namespace strings::fmt {
 
@@ -195,7 +196,7 @@ template <typename T> constexpr auto convert_printf_spec(fmt::arg const& a, char
 
     auto t = a.type;
     auto precision = a.precision;
-    if constexpr (std::floating_point<T>) {
+    if constexpr (std::is_floating_point_v<T>) {
         if (t == ' ') {
             // auto precision
             t = 'g';
