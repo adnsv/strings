@@ -5,6 +5,7 @@
 #include <concepts>
 #include <string_view>
 #include <utility>
+#include <type_traits>
 
 namespace strings {
 
@@ -13,9 +14,12 @@ template <typename T> struct string_marshaler;
 template <typename T> struct chars_marshaler;
 template <typename T> struct formatter;
 
+template <class From, class To>
+concept convertible_to_ = std::is_convertible_v<From, To>;
+
 template <typename T, typename... Args>
 concept string_marshalable = requires(T const& v, Args&&... args) {
-    { string_marshaler<T>{}(v, std::forward<Args>(args)...) } -> std::convertible_to<std::string_view>;
+    { string_marshaler<T>{}(v, std::forward<Args>(args)...) } -> convertible_to_<std::string_view>;
 };
 
 template <typename T, typename... Args>
@@ -40,8 +44,8 @@ concept to_chars_convertible = requires(char* buf, T const& v, Args&&... args) {
 
 namespace detail {
 template <typename T>
-concept supported_format_arg = std::convertible_to<T, std::string_view> || 
-    std::integral<T> || std::floating_point<T> || to_chars_convertible<T> ||
+concept supported_format_arg = convertible_to_<T, std::string_view> ||
+    std::is_integral_v<T> || std::is_floating_point_v<T> || to_chars_convertible<T> ||
     string_marshalable<T> || chars_marshalable<T> || formattable<T> ;
 }
 

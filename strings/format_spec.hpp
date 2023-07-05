@@ -212,7 +212,7 @@ template <typename T> constexpr auto convert_printf_spec(fmt::arg const& a, char
         *pfspec++ = '0' + precision % 10;
     }
 
-    if constexpr (std::integral<T>) {
+    if constexpr (std::is_integral_v<T>) {
         // size specifier for integral inputs
         if constexpr (sizeof(T) == sizeof(long long)) {
             *pfspec++ = 'l';
@@ -228,7 +228,7 @@ template <typename T> constexpr auto convert_printf_spec(fmt::arg const& a, char
             *pfspec++ = 'h';
             *pfspec++ = 'h';
         }
-        if constexpr (std::signed_integral<T>) {
+        if constexpr (std::is_signed_v<T> && std::is_integral_v<T>) {
             if (t == ' ')
                 t = 'd';
         }
@@ -240,10 +240,10 @@ template <typename T> constexpr auto convert_printf_spec(fmt::arg const& a, char
         *pfspec++ = 0;
         return true;
     }
-    else if constexpr (std::floating_point<T>) {
-        if constexpr (std::same_as<std::remove_cv_t<T>, long double>)
+    else if constexpr (std::is_floating_point_v<T>) {
+        if constexpr (std::is_same_v<std::remove_cv_t<T>, long double>)
             *pfspec++ = 'L';
-        else if constexpr (std::same_as<std::remove_cv_t<T>, double>)
+        else if constexpr (std::is_same_v<std::remove_cv_t<T>, double>)
             *pfspec++ = 'l';
         *pfspec++ = t;
         *pfspec++ = 0;

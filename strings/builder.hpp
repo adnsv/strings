@@ -56,7 +56,7 @@ struct writer {
     constexpr auto write(std::string_view sv) -> std::errc;
 
     template <typename T>
-    requires(!std::same_as<T, std::string_view> && std::convertible_to<T, std::string_view> && !marshalable<T>)
+    requires(!std::same_as<T, std::string_view> && convertible_to_<T, std::string_view> && !marshalable<T>)
     constexpr auto write(T const& s) -> std::errc;
 
     template <typename T, typename... Args>
@@ -197,7 +197,7 @@ constexpr auto writer::write(std::string_view sv) -> std::errc
 }
 
 template <typename T>
-requires(!std::same_as<T, std::string_view> && std::convertible_to<T, std::string_view> && !marshalable<T>)
+requires(!std::same_as<T, std::string_view> && convertible_to_<T, std::string_view> && !marshalable<T>)
 constexpr auto writer::write(T const& s) -> std::errc
 {
     return write(std::string_view(s));
@@ -209,7 +209,7 @@ constexpr auto writer::write(T const& v, Args&&... args) -> std::errc
 {
     constexpr auto nargs = sizeof...(Args);
 
-    if constexpr (std::floating_point<T> && (nargs == 0)) {
+    if constexpr (std::is_floating_point_v<T> && (nargs == 0)) {
         auto const spec = sizeof(T) >= 8 ? "%.16g" : "%.7g";
         auto const n = std::snprintf(cursor_, last_ - cursor_, spec, v);
 
@@ -260,13 +260,13 @@ template <detail::supported_format_arg T> constexpr auto writer::vfmt(T const& v
     else if constexpr (marshalable<T>) {
         return write(v);
     }
-    else if constexpr (std::convertible_to<T, std::string_view>) {
+    else if constexpr (convertible_to_<T, std::string_view>) {
         if (a.type != ' ' && a.type != 's')
             return std::errc::invalid_argument;
         else
             return write(v);
     }
-    else if constexpr (std::integral<T>) {
+    else if constexpr (std::is_integral_v<T>) {
         char pfspec[16];
         if (!fmt::convert_printf_spec<T>(a, pfspec))
             return std::errc::invalid_argument;
@@ -277,7 +277,7 @@ template <detail::supported_format_arg T> constexpr auto writer::vfmt(T const& v
         cursor_ += n;
         return std::errc{};
     }
-    else if constexpr (std::floating_point<T>) {
+    else if constexpr (std::is_floating_point_v<T>) {
         if (auto fpc = std::fpclassify(v); fpc == FP_ZERO) {
             write_codeunit('0');
             return std::errc{};
