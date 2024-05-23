@@ -60,7 +60,7 @@ struct numeric_section_result {
     friend auto operator==(numeric_section_result const&, numeric_section_result const&) -> bool = default;
 };
 
-auto find_last_numeric_section(std::string_view s) -> numeric_section_result
+inline auto find_last_numeric_section(std::string_view s) -> numeric_section_result
 {
     auto last = s.size();
     while (last)
