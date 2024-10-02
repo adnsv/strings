@@ -3,6 +3,7 @@
 #include <charconv>
 #include <string_view>
 #include <type_traits>
+#include <limits>
 
 namespace strings::fmt {
 
